@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>心理测评室</title>
+<style>
+@font-face{font-family:'Quicksand';src:url("fonts/quicksand-500.woff2") format("woff2");font-weight:400 600;font-display:swap}
+@font-face{font-family:'Lora';src:url("fonts/lora-500.woff2") format("woff2");font-weight:400 600;font-display:swap}
+@font-face{font-family:'JBMono';src:url("fonts/jetbrains-mono-400.woff2") format("woff2");font-weight:400 600;font-display:swap}
+
+:root{
+  --ink:#241f38; --ink2:#4d4670; --dim:#857da6;
+  --glass:rgba(255,255,255,.74); --line:rgba(255,255,255,.9); --edge:rgba(112,102,168,.16);
+  --accent:#6d5ce0; --accent-2:#9b8bf7; --ok:#2c9d72; --bad:#d24f6d; --warn:#b8811f;
+  --shadow:0 10px 30px rgba(52,44,96,.12);
+  --font-ui:'Quicksand',system-ui,'Microsoft YaHei','PingFang SC',sans-serif;
+  --font-body:'Quicksand',system-ui,'Microsoft YaHei','PingFang SC',sans-serif;
+  --font-mono:'JBMono',ui-monospace,Consolas,'Microsoft YaHei',monospace;
+  --fs:14px;
+  --fs-2xs:calc(var(--fs) * .8); --fs-xs:calc(var(--fs) * .85); --fs-sm:calc(var(--fs) * .9);
+  --fs-in:calc(var(--fs) * .95); --fs-md:calc(var(--fs) * 1); --fs-lg:calc(var(--fs) * 1.15);
+  --fs-xl:calc(var(--fs) * 1.5); --fs-h1:calc(var(--fs) * 1.6); --fs-q:calc(var(--fs) * 1.5);
+  --bg-stack:
+    linear-gradient(180deg,rgba(255,255,255,.34) 0%,rgba(255,255,255,.6) 45%,rgba(253,251,255,.78) 100%),
+    url("bg.jpg") center top / cover no-repeat fixed,
+    linear-gradient(160deg,#f0f2ff,#f9f4ff 55%,#eef7fb);
+}
+.hidden{display:none !important}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:rgba(109,92,224,.3) transparent}
+*::-webkit-scrollbar{width:9px;height:9px}
+*::-webkit-scrollbar-thumb{background:rgba(109,92,224,.28);border-radius:6px;border:2px solid transparent;background-clip:content-box}
+body{margin:0;color:var(--ink);font-family:var(--font-body);font-size:var(--fs);line-height:1.7;background:var(--bg-stack)}
+.app{max-width:1120px;margin:0 auto;padding:20px 18px 64px}
+#trail-canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:90}
+#trail-canvas.off{display:none}
+
+/* 顶栏 */
+.topbar{display:flex;align-items:center;gap:13px;flex-wrap:wrap;margin-bottom:16px}
+.mark{width:48px;height:48px;border-radius:16px;flex:none;display:grid;place-items:center;
+  background:linear-gradient(160deg,#8fb8ff,#6d5ce0);color:#fff;box-shadow:0 8px 22px rgba(109,92,224,.3)}
+.mark svg{width:26px;height:26px;stroke:#fff;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+h1{font-family:var(--font-ui);font-size:var(--fs-h1);margin:0;letter-spacing:.2px}
+.sub{color:var(--ink2);font-size:var(--fs-sm);margin-top:2px}
+.pill{margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--glass);
+  border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:var(--fs-sm);
+  color:var(--ink2);box-shadow:var(--shadow);white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:#3dbd8b;box-shadow:0 0 0 4px rgba(61,189,139,.18)}
+
+.layout{display:grid;grid-template-columns:88px minmax(0,1fr);gap:16px;align-items:start}
+.rail{position:sticky;top:16px;display:flex;flex-direction:column;gap:4px;padding:8px;
+  background:var(--glass);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow)}
+.tab{display:flex;flex-direction:column;align-items:center;gap:5px;padding:11px 6px;border-radius:16px;
+  border:1px solid transparent;background:transparent;color:var(--ink2);font-size:var(--fs-2xs);
+  font-family:inherit;cursor:pointer;transition:.16s}
+.tab svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.tab:hover{background:rgba(255,255,255,.62);color:var(--ink)}
+.tab.on{background:linear-gradient(180deg,#8d7ff3,#6d5ce0);color:#fff;box-shadow:0 8px 18px rgba(109,92,224,.32)}
+.content{min-width:0}
+
+.card{background:var(--glass);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid var(--line);border-radius:20px;padding:18px 20px;margin-bottom:14px;box-shadow:var(--shadow)}
+.card h2{display:flex;align-items:center;gap:9px;font-family:var(--font-ui);font-size:var(--fs-lg);
+  margin:0 0 12px;color:#3a3260;font-weight:600}
+.card h2::before{content:"";width:4px;height:15px;border-radius:3px;flex:none;background:linear-gradient(180deg,var(--accent),var(--accent-2))}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(180deg,#7f6eee,#6455d8);
+  color:#fff;border:0;border-radius:12px;padding:9px 18px;font-size:var(--fs-in);font-family:inherit;
+  cursor:pointer;box-shadow:0 6px 16px rgba(100,85,216,.26);transition:.15s}
+button:hover{filter:brightness(1.06);transform:translateY(-1px)}
+button.ghost{background:rgba(255,255,255,.72);color:var(--ink2);border:1px solid var(--edge);box-shadow:none}
+button.ghost:hover{color:var(--accent);border-color:var(--accent-2);filter:none}
+button.tiny{padding:3px 11px;font-size:var(--fs-2xs);box-shadow:none}
+:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px;border-radius:10px}
+.muted{color:var(--dim);font-size:var(--fs-sm)}
+code{background:rgba(255,255,255,.72);border:1px solid var(--edge);border-radius:6px;padding:1px 6px;font-family:var(--font-mono);font-size:var(--fs-xs)}
+
+/* 分类 chip */
+.chip{padding:5px 14px;border-radius:999px;border:1px solid var(--edge);background:rgba(255,255,255,.66);
+  color:var(--ink2);font-size:var(--fs-sm);cursor:pointer;font-family:inherit;transition:.15s;box-shadow:none}
+.chip:hover{color:var(--accent)}
+.chip.on{background:linear-gradient(180deg,#8d7ff3,#6d5ce0);color:#fff;border-color:transparent}
+input,select{background:rgba(255,255,255,.86);color:var(--ink);border:1px solid var(--edge);
+  border-radius:11px;padding:8px 11px;font-size:var(--fs-in);font-family:inherit}
+input:focus,select:focus{outline:none;border-color:var(--accent-2);box-shadow:0 0 0 3px rgba(109,92,224,.15)}
+
+/* 量表卡 */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:12px}
+.sc{position:relative;text-align:left;background:rgba(255,255,255,.7);border:1px solid var(--line);
+  border-radius:18px;padding:15px 16px;cursor:pointer;transition:.18s;display:flex;flex-direction:column;gap:6px}
+.sc:hover{transform:translateY(-3px);border-color:var(--accent-2);box-shadow:0 14px 28px rgba(88,74,180,.14)}
+.sc .top{display:flex;align-items:center;gap:8px}
+.sc .nm{font-family:var(--font-ui);font-size:var(--fs-md);color:#3a3260;font-weight:600}
+.sc .cat{margin-left:auto;font-size:var(--fs-2xs);color:#6a6298;background:rgba(109,92,224,.1);
+  border-radius:999px;padding:2px 9px}
+.sc .desc{color:var(--ink2);font-size:var(--fs-sm);line-height:1.6}
+.sc .meta{display:flex;gap:10px;color:var(--dim);font-size:var(--fs-xs);margin-top:3px}
+.sc .done{position:absolute;right:12px;bottom:12px;font-size:var(--fs-2xs);color:var(--ok)}
+
+/* 答题 */
+.progress{height:7px;border-radius:99px;background:rgba(109,92,224,.14);overflow:hidden;margin:4px 0 14px}
+.progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#8d7ff3,#6d5ce0);
+  width:0;transition:width .35s cubic-bezier(.4,0,.2,1)}
+.qwrap{min-height:230px;display:flex;flex-direction:column;justify-content:center}
+.q{font-family:var(--font-ui);font-size:var(--fs-q);line-height:1.5;color:#2f2850;margin:0 0 18px;font-weight:600}
+.opts{display:flex;flex-direction:column;gap:9px}
+.opt{display:flex;align-items:center;gap:12px;text-align:left;background:rgba(255,255,255,.7);
+  border:1px solid var(--line);border-radius:14px;padding:13px 16px;cursor:pointer;font-family:inherit;
+  font-size:var(--fs-in);color:var(--ink);transition:.15s;box-shadow:none}
+.opt:hover{border-color:var(--accent-2);background:rgba(255,255,255,.9)}
+.opt.on{border-color:var(--accent);background:linear-gradient(180deg,rgba(141,127,243,.14),rgba(109,92,224,.1)}
+.opt .k{flex:none;width:24px;height:24px;border-radius:8px;display:grid;place-items:center;
+  background:rgba(109,92,224,.12);color:#6a5fbf;font-family:var(--font-mono);font-size:var(--fs-xs)}
+.opt.on .k{background:linear-gradient(180deg,#8d7ff3,#6d5ce0);color:#fff}
+.live{margin-top:16px;padding-top:14px;border-top:1px dashed var(--edge)}
+.livebar{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+.livebar span{font-size:var(--fs-xs);color:var(--ink2);width:82px;flex:none;text-align:right}
+.livebar .track{flex:1;height:6px;border-radius:99px;background:rgba(109,92,224,.12);overflow:hidden}
+.livebar .track i{display:block;height:100%;background:linear-gradient(90deg,#8d7ff3,#6d5ce0);width:0;transition:width .3s}
+
+/* 结果 */
+.hero{text-align:center;padding:8px 0 4px}
+.hero .code{font-family:var(--font-mono);font-size:var(--fs-xl);color:#6d5ce0;letter-spacing:2px}
+.hero .nm{font-family:var(--font-ui);font-size:var(--fs-h1);margin:6px 0 6px;color:#2f2850}
+.hero .sum{color:var(--ink2);font-size:var(--fs-md);max-width:620px;margin:0 auto}
+.radarwrap{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start;margin-top:6px}
+canvas#radar{width:100%;max-width:280px;aspect-ratio:1/1}
+.dimrow{margin-bottom:11px}
+.dimrow .lab{display:flex;justify-content:space-between;font-size:var(--fs-sm);color:var(--ink2);margin-bottom:4px}
+.dimrow .track{height:8px;border-radius:99px;background:rgba(109,92,224,.12);overflow:hidden}
+.dimrow .track i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#8d7ff3,#6d5ce0)}
+.notice{background:rgba(255,244,219,.9);border-left:3px solid #e0b155;color:#71521a;padding:11px 14px;
+  border-radius:0 12px 12px 0;font-size:var(--fs-sm);margin-bottom:12px}
+.notice.bad{background:rgba(255,235,239,.92);border-left-color:#dd6a86;color:#7d2740}
+.notice.good{background:rgba(233,250,241,.9);border-left-color:#3dbd8b;color:#1f6b4f}
+.kv{display:flex;flex-direction:column;gap:4px}
+.kv .line{display:flex;gap:10px;font-size:var(--fs-sm);color:var(--ink2)}
+.kv .line b{color:#3a3260;font-weight:600;min-width:64px}
+ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm)}
+
+.cat-h{margin:14px 2px 10px;font-family:var(--font-ui);color:#3a3260}
+.cat-h b{font-size:var(--fs-md)}
+.cat-h span{margin-left:10px;color:var(--dim);font-size:var(--fs-xs)}
+
+.sec-h{margin:18px 0 10px;font-family:var(--font-ui);font-size:var(--fs-md);color:#3a3260;
+  display:flex;align-items:center;gap:8px}
+.sec-h::before{content:"";width:4px;height:14px;border-radius:3px;background:linear-gradient(180deg,var(--accent),var(--accent-2))}
+.cand{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.cand .nm{width:110px;flex:none;font-size:var(--fs-sm);color:var(--ink2);text-align:right}
+.cand .track{flex:1;height:9px;border-radius:99px;background:rgba(109,92,224,.12);overflow:hidden}
+.cand .track i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#8d7ff3,#6d5ce0)}
+.cand.top .nm{color:#3a3260;font-weight:600}
+.cand.top .track i{background:linear-gradient(90deg,#7c6cf0,#5b4bd6)}
+.cand .pc{width:44px;flex:none;text-align:right;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--dim)}
+.cand .tip{flex-basis:100%;color:var(--dim);font-size:var(--fs-xs);padding-left:120px;margin-top:-2px}
+.howto{margin-top:16px;background:rgba(255,255,255,.55);border:1px solid var(--line);border-radius:14px;padding:11px 15px}
+.howto summary{cursor:pointer;font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-in)}
+.howto ul{margin:9px 0 0}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:640px){.two{grid-template-columns:1fr}}
+
+/* 宿主面板可能给 button 注入样式，这里用 ID 作用域 + !important 压回去，
+   保证「未选中 = 浅底深字 / 已选中 = 紫底白字 + 对勾」，否则用户会以为没点上 */
+#starter-counts .cchip{padding:8px 16px;border-radius:12px;
+  border:1px solid var(--edge) !important;background:rgba(255,255,255,.82) !important;
+  color:var(--ink2) !important;font-family:inherit;font-size:var(--fs-in);cursor:pointer;
+  box-shadow:none !important;transition:.15s;opacity:.92}
+#starter-counts .cchip:hover{border-color:var(--accent-2) !important;color:var(--accent) !important;opacity:1}
+#starter-counts .cchip.on{background:linear-gradient(180deg,#8d7ff3,#6d5ce0) !important;
+  color:#fff !important;border-color:#6d5ce0 !important;opacity:1;
+  box-shadow:0 6px 16px rgba(109,92,224,.35) !important;transform:translateY(-1px)}
+#starter-counts .cchip.on::before{content:"✓ ";font-weight:700}
+#starter-counts .cchip small{display:block;font-size:var(--fs-2xs);opacity:.85;font-weight:400;color:inherit}
+.cchip:hover{color:var(--accent);border-color:var(--accent-2)}
+.cchip.on{background:linear-gradient(180deg,#8d7ff3,#6d5ce0);color:#fff;border-color:transparent}
+.cchip small{display:block;font-size:var(--fs-2xs);opacity:.85;font-weight:400}
+
+/* 结果页的结构：卡片框 + 分隔线（原先一堆裸文本看着散） */
+.framebox{background:rgba(255,255,255,.66);border:1px solid var(--line);border-radius:14px;
+  padding:12px 15px;margin-bottom:9px;box-shadow:0 2px 10px rgba(80,70,160,.05)}
+.framebox .fb-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:7px}
+.framebox .fb-name{font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-md)}
+.framebox .fb-val{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--dim);white-space:nowrap}
+.framebox .fb-tip{color:var(--dim);font-size:var(--fs-sm);margin-top:6px;line-height:1.7}
+.hr{height:1px;margin:18px 0 14px;
+  background:linear-gradient(90deg,rgba(109,92,224,0),rgba(109,92,224,.28),rgba(109,92,224,0))}
+.howto{border:1px solid var(--line)}
+.howto summary{font-weight:600}
+.howto summary::marker{color:var(--accent)}
+
+/* 结果配图横幅 */
+.hero-art{position:relative;height:130px;border-radius:20px;overflow:hidden;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--art-a,#8d7ff3),var(--art-b,#5ec8f0));
+  box-shadow:0 12px 28px rgba(80,70,160,.18);margin-bottom:16px}
+.hero-art::before{content:"";position:absolute;inset:0;opacity:.45;
+  background-image:radial-gradient(rgba(255,255,255,.6) 1.5px,transparent 1.6px);background-size:15px 15px}
+.hero-art::after{content:"";position:absolute;width:240px;height:240px;border-radius:50%;top:-60px;right:-50px;
+  background:radial-gradient(rgba(255,255,255,.55),rgba(255,255,255,0) 70%)}
+#hero-emoji{position:relative;font-size:62px;line-height:1;filter:drop-shadow(0 8px 12px rgba(50,35,110,.3))}
+
+/* 单维度：双向刻度（社恐 ←→ 社牛 那种） */
+.gauge{margin:6px 0 12px}
+.gauge-top{display:flex;justify-content:space-between;font-size:var(--fs-sm);color:var(--ink2);margin-bottom:6px}
+.gauge-track{position:relative;height:12px;border-radius:99px;background:rgba(109,92,224,.14);margin:0 8px}
+.gauge-track i{position:absolute;top:50%;width:18px;height:18px;border-radius:50%;transform:translate(-50%,-50%);
+  background:#fff;border:3px solid var(--accent);box-shadow:0 2px 8px rgba(80,70,160,.3)}
+.gauge-mid{position:absolute;left:50%;top:-4px;bottom:-4px;width:1px;background:rgba(109,92,224,.25)}
+.gauge-val{text-align:center;margin-top:8px;font-family:var(--font-ui);color:#3a3260}
+
+.modal{position:fixed;inset:0;z-index:120;display:flex;align-items:center;justify-content:center;
+  background:rgba(40,32,70,.34);backdrop-filter:blur(4px);padding:20px}
+.modal-box{background:rgba(255,255,255,.96);border-radius:20px;padding:18px 20px;max-width:660px;width:100%;
+  box-shadow:0 24px 60px rgba(40,30,80,.28);max-height:92vh;overflow:auto}
+.modal-box img{width:100%;border-radius:14px;border:1px solid var(--edge);display:block}
+
+/* 记录 */
+.rec{background:rgba(255,255,255,.7);border:1px solid var(--line);border-radius:14px;padding:11px 14px;
+  display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.rec .t{font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-md)}
+.rec .m{color:var(--dim);font-size:var(--fs-xs)}
+.rec .act{margin-left:auto;display:flex;gap:6px}
+.trend{display:flex;align-items:flex-end;gap:8px;height:120px;margin-top:8px}
+.trend .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px}
+.trend .bar{width:100%;border-radius:8px 8px 0 0;background:linear-gradient(180deg,#8d7ff3,#6d5ce0);min-height:4px}
+.trend .lb{font-size:var(--fs-2xs);color:var(--dim)}
+
+.expfloat{position:fixed;z-index:99;pointer-events:none;font-family:var(--font-ui);font-weight:600;color:#6d5ce0;
+  text-shadow:0 1px 0 #fff,0 0 14px rgba(109,92,224,.5);animation:floatUp 1.1s ease forwards}
+@keyframes floatUp{0%{opacity:0;transform:translate(-50%,0) scale(.9)}20%{opacity:1;transform:translate(-50%,-12px)}
+  100%{opacity:0;transform:translate(-50%,-66px)}}
+
+@media (max-width:820px){
+  .layout{grid-template-columns:1fr}
+  .rail{position:static;flex-direction:row;overflow-x:auto;border-radius:18px}
+  .tab{min-width:76px}
+  .radarwrap{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<canvas id="trail-canvas" aria-hidden="true"></canvas>
+<div class="app">
+  <div class="topbar">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 3.5a4.5 4.5 0 0 0-4.5 4.5v1a3 3 0 0 0-1.5 5.7V16a3 3 0 0 0 3 3h1.2A3 3 0 0 0 15 17.6V14.7A3 3 0 0 0 13.5 9V8A4.5 4.5 0 0 0 9 3.5"/><path d="M12 3.5V21"/></svg>
+    </div>
+    <div>
+      <h1>心理测评室</h1>
+      <div class="sub">心理 · 人格 · 趣味测评合集｜本地计分，结果只存在你这台机器上</div>
+    </div>
+    <div class="pill"><span class="dot"></span><span id="pill-text">正在连接…</span></div>
+  </div>
+
+  <div class="layout">
+    <nav class="rail">
+      <button class="tab on" data-tab="home">
+        <svg viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20H4z"/></svg><span>量表</span>
+      </button>
+      <button class="tab" data-tab="quiz">
+        <svg viewBox="0 0 24 24"><path d="M9 4h6v3H9z"/><rect x="5" y="9" width="14" height="11" rx="2"/><path d="M9 14h6"/></svg><span>答题</span>
+      </button>
+      <button class="tab" data-tab="result">
+        <svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15V9M12 15V7M16 15v-4"/></svg><span>结果</span>
+      </button>
+      <button class="tab" data-tab="records">
+        <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7M9 8h4"/></svg><span>记录</span>
+      </button>
+      <button class="tab" data-tab="about">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.8"/></svg><span>关于</span>
+      </button>
+    </nav>
+
+    <main class="content">
+
+      <!-- 量表库 -->
+      <div id="view-home">
+        <div class="card hidden" id="starter">
+          <h2 id="starter-name">—</h2>
+          <div class="muted" id="starter-note"></div>
+          <div class="row" id="starter-counts" style="margin:12px 0 4px"></div>
+          <div class="row" id="starter-custom-row" style="margin-top:6px">
+            <span class="muted">或者自己定题数：</span>
+            <input id="starter-custom" type="number" min="1" step="1" style="width:110px" placeholder="例如 35">
+            <button class="ghost tiny" id="starter-apply">按这个题数开始</button>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button id="starter-go">开始作答</button>
+            <button class="ghost" id="starter-cancel">取消</button>
+            <span class="muted" id="starter-tip"></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>选一份开始</h2>
+          <div class="row" style="margin-bottom:12px">
+            <input id="q" placeholder="搜索量表名称或简介" style="min-width:220px">
+            <div class="row" id="cats"></div>
+          </div>
+          <div id="gallery"></div>
+        </div>
+        <div class="card">
+          <h2>先说清楚</h2>
+          <div class="notice">这些测评只用于<b>自我了解与反思</b>，<b>不是医学诊断</b>，也不能替代心理咨询或治疗。
+            如果结果让你不舒服，或者你正在经历困难，请优先联系专业人士。</div>
+          <div class="muted">数据来源：科学量表使用公共领域或公开可复现的条目（见每份量表的"来源"），类型类与趣味量表为原创题目。</div>
+        </div>
+      </div>
+
+      <!-- 答题 -->
+      <div id="view-quiz" class="hidden">
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <div style="font-family:var(--font-ui);font-size:var(--fs-md);color:#3a3260" id="quiz-name">—</div>
+              <div class="muted" id="quiz-pos">—</div>
+            </div>
+            <button class="ghost tiny" id="btn-quit">退出</button>
+          </div>
+          <div class="progress"><i id="bar"></i></div>
+          <div class="qwrap">
+            <h3 class="q" id="qtext">—</h3>
+            <div class="muted" id="q-hint" style="margin:-8px 0 12px">按第一反应选就好，没有对错。</div>
+            <div class="opts" id="opts"></div>
+          </div>
+          <div class="live" id="live"></div>
+          <div class="row" style="justify-content:space-between;margin-top:14px">
+            <button class="ghost" id="btn-prev">上一题</button>
+            <div class="muted" id="hint">键盘 1-5 选择，Enter 下一题</div>
+            <button id="btn-next">下一题</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 结果 -->
+      <div id="view-result" class="hidden">
+        <div class="card">
+          <div id="risk-box"></div>
+          <div class="hero">
+            <div class="hero-art" id="hero-art" aria-hidden="true"><span id="hero-emoji">🧩</span></div>
+            <div class="code" id="r-code">—</div>
+            <div class="nm" id="r-name">—</div>
+            <div class="sum" id="r-sum"></div>
+            <div class="muted" id="r-meta" style="margin-top:8px"></div>
+          </div>
+
+          <div class="sec-h" id="why-title">为什么是这个结果</div>
+          <div id="why-box"></div>
+
+          <div id="radar-block" class="radarwrap hidden">
+            <canvas id="radar"></canvas>
+            <div class="muted">这张图叫「剖面图」：离边缘越远，说明那个维度上越突出。</div>
+          </div>
+
+          <div id="extra"></div>
+
+          <div class="hr"></div>
+          <div class="row" style="margin-top:6px">
+            <button id="btn-copy">复制结果</button>
+            <button class="ghost" id="btn-card">生成分享卡</button>
+            <button class="ghost" id="btn-again">再测一次</button>
+            <button class="ghost" id="btn-back">回到量表库</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 记录 -->
+      <div id="view-records" class="hidden">
+        <div class="card">
+          <h2>历史记录</h2>
+          <div class="row" style="margin-bottom:12px">
+            <select id="filter-scale"><option value="">全部量表</option></select>
+            <button class="ghost tiny" id="btn-export">导出（文本）</button>
+            <button class="ghost tiny" id="btn-clear">清空全部</button>
+          </div>
+          <div id="records"></div>
+          <div id="trend"></div>
+        </div>
+      </div>
+
+      <!-- 关于与设置 -->
+      <div id="view-about" class="hidden">
+        <div class="card">
+          <h2>版权与来源</h2>
+          <div class="kv">
+            <div class="line"><b>大五人格</b><span>Mini-IPIP（Donnellan 等，2006）条目来自 International Personality Item Pool（ipip.ori.org），公共领域。</span></div>
+            <div class="line"><b>PHQ-9</b><span>Kroenke 等，公开提供，复制/翻译无需授权。</span></div>
+            <div class="line"><b>GAD-7</b><span>Spitzer 等，公开提供，复制无需授权。</span></div>
+            <div class="line"><b>UCLA 简版</b><span>Hughes 等（2004），研究用途公开可复现。</span></div>
+            <div class="line"><b>关于分数</b><span>这些量表没有常模样本，分数只反映「这份量表内部」的相对强度，不是人群排名。</span></div>
+            <div class="line"><b>原创题目</b><span>16 型人格、职业兴趣、依恋类型、心理韧性、魔法分院、灵魂动物为本插件原创，非官方 MBTI / 霍兰德测验，仅作探索与娱乐。</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>隐私</h2>
+          <div class="notice good">答案与结果<b>只写在本机</b> <code>data/records.json</code>，不上传、不联网、不给第三方。
+            你可以随时导出或一键清空。</div>
+        </div>
+        <div class="card">
+          <h2>界面</h2>
+          <div class="grid">
+            <div><label class="muted">字体</label><select id="ui-font"></select></div>
+            <div><label class="muted">字号</label>
+              <select id="ui-size"><option value="s">小</option><option value="m">标准</option>
+                <option value="l">大</option><option value="xl">特大</option></select></div>
+            <div><label class="muted">鼠标轨迹</label>
+              <select id="ui-trail"><option value="auto">自动</option><option value="on">开</option><option value="off">关</option></select></div>
+            <div><label class="muted">背景</label>
+              <select id="ui-bg"><option value="default">插件自带</option><option value="plain">纯色渐变</option></select></div>
+            <div><label class="muted">蒙层</label>
+              <select id="ui-bg-dim"><option value="light">薄</option><option value="medium">中</option><option value="strong">厚</option></select></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>危机求助</h2>
+          <ul class="tips" id="crisis"></ul>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<div class="modal hidden" id="card-modal">
+  <div class="modal-box">
+    <div class="sec-h" style="margin-top:0">分享卡</div>
+    <img id="card-img" alt="分享卡预览">
+    <div class="muted" id="card-path" style="margin-top:8px;word-break:break-all"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="card-copy">复制图片</button>
+      <button class="ghost" id="card-path-copy">复制文件路径</button>
+      <button class="ghost" id="card-close">关闭</button>
+    </div>
+    <div class="muted" style="margin-top:8px">在图片上右键 → 「图片另存为」也可以手动保存。</div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const PORTS = [15800, 15801, 15802, 15803, 15804];
+const CRISIS = [
+  '全国希望 24 热线：400-161-9995（24 小时）',
+  '北京心理危机研究与干预中心：010-82951332',
+  '中国心理卫生协会心理援助热线：400-161-9995',
+  '情况紧急请立刻拨打 120 / 110。',
+];
+let API_BASE = localStorage.getItem('assess_base');
+let VIEWS = ['home', 'quiz', 'result', 'records', 'about'];
+
+async function findBase(){
+  if (API_BASE !== null && API_BASE !== undefined) return API_BASE;
+  for (const base of ['', ...PORTS.map((p) => `http://127.0.0.1:${p}`)]){
+    try{
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 1200);
+      const res = await fetch(`${base}/api/scales`, {signal: ctrl.signal});
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data && data.scales){ API_BASE = base; localStorage.setItem('assess_base', base); return base; }
+    }catch(err){}
+  }
+  return null;
+}
+async function api(path, body){
+  const base = await findBase();
+  if (base === null) throw new Error('连不上面板服务：确认插件已启动，或稍等几秒再刷新');
+  const res = await fetch(base + path, body === undefined
+    ? {method: 'GET'}
+    : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+  return await res.json();
+}
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+function floatText(text, at){
+  const node = document.createElement('div');
+  node.className = 'expfloat';
+  node.textContent = text;
+  node.style.left = `${(at && at.x) || window.innerWidth - 130}px`;
+  node.style.top = `${(at && at.y) || 110}px`;
+  node.style.fontSize = 'var(--fs-sm)';
+  document.body.appendChild(node);
+  setTimeout(() => node.remove(), 1200);
+}
+function go(view){
+  VIEWS.forEach((name) => $('view-' + name).classList.toggle('hidden', name !== view));
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.tab === view));
+}
+document.querySelectorAll('.tab').forEach((tab) => { tab.onclick = () => go(tab.dataset.tab); });
+
+// ── 鼠标轨迹 ──────────────────────────────────────────────────
+const trail = (() => {
+  const canvas = $('trail-canvas');
+  const ctx = canvas.getContext('2d');
+  let points = [];
+  let raf = 0;
+  let dpr = 1;
+  function resize(){
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  function push(x, y){
+    points.push({x, y, t: performance.now()});
+    if (points.length > 34) points = points.slice(-34);
+    if (!raf) raf = requestAnimationFrame(draw);
+  }
+  function draw(){
+    const now = performance.now();
+    points = points.filter((p) => now - p.t < 520);
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    if (points.length < 2){ points = []; raf = 0; return; }
+    for (let i = 1; i < points.length; i++){
+      const a = points[i - 1], b = points[i];
+      const power = 1 - (now - b.t) / 520;
+      const ratio = i / points.length;
+      ctx.strokeStyle = `hsla(${238 + ratio * 46}, ${66 - (1 - power) * 18}%, ${60 + ratio * 6}%, ${0.5 * power})`;
+      ctx.lineWidth = 1.8 + 8 * power * ratio;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    const head = points[points.length - 1];
+    const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 18);
+    glow.addColorStop(0, 'rgba(109,92,224,.4)');
+    glow.addColorStop(1, 'rgba(109,92,224,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(head.x, head.y, 18, 0, Math.PI * 2);
+    ctx.fill();
+    raf = requestAnimationFrame(draw);
+  }
+  function enable(on){
+    canvas.classList.toggle('off', !on);
+    if (!on){
+      points = [];
+      if (raf){ cancelAnimationFrame(raf); raf = 0; }
+      ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    }
+  }
+  document.addEventListener('pointermove', (ev) => { if (!canvas.classList.contains('off')) push(ev.clientX, ev.clientY); }, {passive: true});
+  window.addEventListener('resize', resize);
+  resize();
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return {enable, reduced: reduce};
+})();
+
+// ── 偏好 ─────────────────────────────────────────────────────
+const FONTS = [
+  {id: 'system', name: '系统默认', ui: `'Quicksand',system-ui,'Microsoft YaHei','PingFang SC',sans-serif`, mono: `'JBMono',Consolas,monospace`},
+  {id: 'yahei', name: '微软雅黑 / 苹方', ui: `'Quicksand','Microsoft YaHei','PingFang SC',sans-serif`, mono: `'JBMono',Consolas,'Microsoft YaHei',monospace`},
+  {id: 'source', name: '思源黑体 / Noto', ui: `'Quicksand','Source Han Sans SC','Noto Sans SC','HarmonyOS Sans SC','Microsoft YaHei',sans-serif`, mono: `'JBMono','Sarasa Mono SC',Consolas,monospace`},
+  {id: 'wenkai', name: '霞鹜文楷（文书感）', ui: `'Lora','LXGW WenKai','霞鹜文楷',STKaiti,'Songti SC',serif`, mono: `'JBMono','Sarasa Mono SC',Consolas,serif`},
+  {id: 'rounded', name: '圆体（可爱）', ui: `'Quicksand',YouYuan,'幼圆','Yuanti SC','Microsoft YaHei',sans-serif`, mono: `'JBMono',Consolas,monospace`},
+  {id: 'mono', name: '等宽 / 代码', ui: `'JBMono','Cascadia Mono',Consolas,'Microsoft YaHei',monospace`, mono: `'JBMono',Consolas,monospace`},
+];
+const SIZES = {s: '12.5px', m: '14px', l: '15.5px', xl: '17px'};
+const BG_DIM = {
+  light:  'rgba(255,255,255,.26) 0%,rgba(255,255,255,.44) 45%,rgba(253,251,255,.6) 100%',
+  medium: 'rgba(255,255,255,.34) 0%,rgba(255,255,255,.6) 45%,rgba(253,251,255,.78) 100%',
+  strong: 'rgba(255,255,255,.52) 0%,rgba(255,255,255,.72) 45%,rgba(253,251,255,.86) 100%',
+};
+const BG_FALLBACK = 'linear-gradient(160deg,#f0f2ff,#f9f4ff 55%,#eef7fb)';
+let PREFS = {ui_font: 'system', ui_font_size: 'm', ui_trail: 'on', bg_mode: 'default', bg_dim: 'medium'};
+$('ui-font').innerHTML = FONTS.map((f) => `<option value="${f.id}">${f.name}</option>`).join('');
+function applyPrefs(){
+  const font = FONTS.find((f) => f.id === PREFS.ui_font) || FONTS[0];
+  const root = document.documentElement.style;
+  root.setProperty('--font-ui', font.ui);
+  root.setProperty('--font-body', font.ui);
+  root.setProperty('--font-mono', font.mono);
+  root.setProperty('--fs', SIZES[PREFS.ui_font_size] || SIZES.m);
+  $('ui-font').value = font.id;
+  $('ui-size').value = SIZES[PREFS.ui_font_size] ? PREFS.ui_font_size : 'm';
+  $('ui-trail').value = ['auto', 'on', 'off'].includes(PREFS.ui_trail) ? PREFS.ui_trail : 'on';
+  const want = PREFS.ui_trail === 'on' ? true : (PREFS.ui_trail === 'off' ? false : !trail.reduced);
+  trail.enable(want);
+}
+function applyBackground(){
+  let image = PREFS.bg_mode === 'plain' ? '' : 'url("bg.jpg") center top / cover no-repeat fixed, ';
+  document.documentElement.style.setProperty(
+    '--bg-stack', `linear-gradient(180deg,${BG_DIM[PREFS.bg_dim] || BG_DIM.medium}), ${image}${BG_FALLBACK}`);
+  $('ui-bg').value = PREFS.bg_mode;
+  $('ui-bg-dim').value = PREFS.bg_dim;
+}
+async function savePrefs(){
+  try { await api('/api/prefs', PREFS); } catch (err) { /* 偏好存不下不影响做题 */ }
+}
+['ui-font', 'ui-size', 'ui-trail', 'ui-bg', 'ui-bg-dim'].forEach((id) => {
+  $(id).onchange = () => {
+    PREFS.ui_font = $('ui-font').value;
+    PREFS.ui_font_size = $('ui-size').value;
+    PREFS.ui_trail = $('ui-trail').value;
+    PREFS.bg_mode = $('ui-bg').value;
+    PREFS.bg_dim = $('ui-bg-dim').value;
+    applyPrefs();
+    applyBackground();
+    savePrefs();
+  };
+});
+applyPrefs();
+applyBackground();
+
+// ── 量表库 ───────────────────────────────────────────────────
+let SCALES = [];
+let CAT = '全部';
+const CAT_DESC = {
+  '人格': '「我是谁」——长期稳定的特质与类型',
+  '情绪健康': '近期状态自查。不是诊断，但能量化感觉、追踪变化',
+  '职业': '兴趣与工作方式，选方向时当参考',
+  '关系': '亲密关系与社交里的你',
+  '趣味': '图一乐，别当真（但也不一定不准）',
+};
+const CAT_ORDER = ['人格', '情绪健康', '职业', '关系', '趣味'];
+$('q').oninput = renderGallery;
+async function loadScales(){
+  try {
+    const res = await api('/api/scales');
+    SCALES = res.scales || [];
+    const cats = ['全部', ...new Set(SCALES.map((s) => s.category))];
+    $('cats').innerHTML = cats.map((c) =>
+      `<button class="chip ${c === CAT ? 'on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('');
+    $('cats').querySelectorAll('.chip').forEach((chip) => {
+      chip.onclick = () => { CAT = chip.dataset.cat; loadScales(); };
+    });
+    $('filter-scale').innerHTML = '<option value="">全部量表</option>' +
+      SCALES.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
+    renderGallery();
+    $('pill-text').textContent = `${SCALES.length} 份量表 · 已做 ${SCALES.reduce((a, b) => a + (b.done || 0), 0)} 次`;
+  } catch (err) {
+    $('pill-text').textContent = '连不上面板服务';
+    $('gallery').innerHTML = `<div class="card">${esc(String(err))}</div>`;
+  }
+}
+function renderGallery(){
+  const q = $('q').value.trim().toLowerCase();
+  const rows = SCALES.filter((s) => {
+    if (CAT !== '全部' && s.category !== CAT) return false;
+    if (!q) return true;
+    return (s.name + s.intro + s.id).toLowerCase().includes(q);
+  });
+  const card = (s) => `
+    <div class="sc" data-id="${esc(s.id)}">
+      <div class="top"><span class="nm">${esc(s.name)}</span><span class="cat">${esc(s.category)}</span></div>
+      <div class="desc">${esc(s.intro)}</div>
+      <div class="meta"><span>${s.fixed ? `官方 ${s.bank_size || s.count} 题` : `题库 ${s.bank_size || s.count} 题 · 默认 ${s.default_items || s.count} 题`}</span><span>约 ${s.minutes} 分钟</span></div>
+      ${s.done ? `<span class="done">已做 ${s.done} 次</span>` : ''}
+    </div>`;
+  let html = '';
+  if (!rows.length){
+    html = '<div class="muted">没有匹配的量表</div>';
+  } else if (CAT === '全部' && !q){
+    for (const cat of CAT_ORDER){
+      const group = rows.filter((s) => s.category === cat);
+      if (!group.length) continue;
+      html += `<div class="cat-h"><b>${cat}</b><span>${esc(CAT_DESC[cat] || '')}</span></div>
+        <div class="grid">${group.map(card).join('')}</div>`;
+    }
+  } else {
+    html = `<div class="grid">${rows.map(card).join('')}</div>`;
+  }
+  $('gallery').innerHTML = html;
+  $('gallery').querySelectorAll('.sc').forEach((el) => { el.onclick = () => openStarter(el.dataset.id); });
+}
+
+// ── 答题 ─────────────────────────────────────────────────────
+let CUR = null;      // 当前量表
+let ANSWERS = [];
+let IDX = 0;
+let PICK = null;     // 正在选择题量的那份
+let PICK_COUNT = 0;
+let PICK_RANGE = {min: 1, bank: 100, officialCount: 0};
+
+// 点量表卡：先让用户选题量（官方量表不可改）
+function openStarter(id){
+  const meta = SCALES.find((s) => s.id === id);
+  if (!meta) return;
+  PICK = meta;
+  const bank = meta.bank_size || meta.count;
+  const min = Math.min(meta.min_items || 4, bank);
+  const officialCount = meta.official_count || 0;   // ⚠ 必须先声明再用（TDZ 会让点击静默失败）
+  $('starter-name').textContent = meta.name;
+  $('starter-note').textContent = officialCount
+    ? `题库 ${bank} 题。默认按官方 ${officialCount} 题作答并套用官方分级；选更多题则进入「扩展自评」，不套官方分级。`
+    : `题库 ${bank} 题，每次随机抽题（两次不会完全一样，用来减少「记住上次答案」的偏差）。`;
+
+  // 选项：按题库大小给一组合适的档位，永远至少有两个可选值
+  let opts;
+  if (officialCount){
+    // 官方量表：默认走官方原题（套官方分级），选更多题则进入「扩展自评」
+    const ladder = [20, 30, 40, 60, 100].filter((x) => x <= bank && x > officialCount);
+    opts = [{n: officialCount, label: `官方 ${officialCount} 题`, sub: '默认 · 套官方分级'}]
+      .concat(ladder.map((x) => ({n: x, label: `${x} 题`, sub: x >= bank ? '全部题库 · 扩展自评' : '扩展自评'})));
+  } else if (meta.fixed){
+    opts = [{n: bank, label: `官方 ${bank} 题`, sub: '固定'}];
+  } else {
+    const wanted = [10, 20, 30, 40, 60, 80, 100].filter((x) => x >= min && x <= bank);
+    const nums = [...new Set([...wanted, bank])].sort((a, b) => a - b);
+    opts = nums.map((x) => ({n: x, label: `${x} 题`,
+      sub: x >= bank ? '全部题库' : `约 ${Math.max(1, Math.round(x * 0.15))} 分钟`}));
+    if (opts.length === 1 && bank <= 6){
+      opts = [{n: bank, label: `全部 ${bank} 题`, sub: '这份量表很短'}];
+    }
+  }
+  const def = Math.min(Math.max(meta.default_items || opts[0].n, min), bank);
+  PICK_COUNT = opts.some((o) => o.n === def) ? def : opts[0].n;
+  $('starter-counts').innerHTML = opts.map((o) =>
+    `<button class="cchip ${o.n === PICK_COUNT ? 'on' : ''}" data-n="${o.n}">${o.label}<small>${o.sub}</small></button>`).join('');
+  $('starter-counts').querySelectorAll('.cchip').forEach((el) => {
+    el.onclick = () => {
+      PICK_COUNT = Number(el.dataset.n);
+      $('starter-counts').querySelectorAll('.cchip').forEach((x) => x.classList.toggle('on', x === el));
+      if ($('starter-custom')) $('starter-custom').value = '';
+      updatePickLabel();
+      floatText(`已选 ${PICK_COUNT} 题`);
+    };
+  });
+  // 自定义题数
+  const customRow = $('starter-custom-row');
+  customRow.classList.toggle('hidden', meta.fixed);
+  if ($('starter-custom')) { $('starter-custom').value = ''; $('starter-custom').max = bank; }
+  PICK_RANGE = {min, bank, officialCount};
+  updatePickLabel();
+  $('starter').classList.remove('hidden');
+  $('starter').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+}
+function updatePickLabel(){
+  const el = $('starter-tip');
+  if (!el) return;
+  const {min, bank, officialCount} = PICK_RANGE;
+  const hint = officialCount
+    ? ` · 官方 ${officialCount} 题套官方分级，更多题算扩展自评`
+    : ` · 可选 ${min}~${bank} 题，题越多结果越稳`;
+  el.textContent = `✅ 当前已选 ${PICK_COUNT} 题${hint}`;
+}
+
+$('starter-cancel').onclick = () => { $('starter').classList.add('hidden'); PICK = null; };
+$('starter-apply').onclick = () => {
+  if (!PICK) return;
+  const bank = PICK.bank_size || PICK.count;
+  let want = parseInt($('starter-custom').value, 10);
+  if (!want || Number.isNaN(want)){ floatText('先填一个题数'); return; }
+  want = Math.max(1, Math.min(bank, want));
+  $('starter-custom').value = want;
+  startScale(PICK.id, want);
+};
+$('starter-custom').onkeydown = (ev) => { if (ev.key === 'Enter') $('starter-apply').click(); };
+$('starter-go').onclick = () => { if (PICK) startScale(PICK.id, PICK_COUNT); };
+
+async function startScale(id, count){
+  try {
+    const res = await api('/api/scale', {id, count: count || 0});
+    if (!res.ok){ alert(res.error); return; }
+    CUR = res.scale;
+    ANSWERS = new Array(CUR.items.length).fill(null);
+    IDX = 0;
+    $('quiz-name').textContent = CUR.name;
+    $('starter').classList.add('hidden');
+    $('btn-next').textContent = '下一题';
+    go('quiz');
+    renderQuestion();
+  } catch (err) { alert(String(err)); }
+}
+function liveDims(){
+  // 本地算实时剖面：只统计已答的题
+  const scores = {};
+  if (CUR.options){
+    const maxValue = Math.max(...CUR.options.map((o) => o.value));
+    const minValue = Math.min(...CUR.options.map((o) => o.value));
+    CUR.items.forEach((item, i) => {
+      const value = ANSWERS[i];
+      if (value == null) return;
+      let raw = Number(value);
+      if (item.reverse) raw = maxValue + minValue - raw;
+      scores[item.dim] = (scores[item.dim] || 0) + raw;
+    });
+  } else {
+    CUR.items.forEach((item, i) => {
+      const pick = ANSWERS[i];
+      if (pick == null) return;
+      const option = item.options[pick];
+      for (const key in (option.weights || {})) scores[key] = (scores[key] || 0) + option.weights[key];
+    });
+  }
+  const keys = new Set();
+  CUR.items.forEach((item) => {
+    if (item.dim) keys.add(item.dim);
+    (item.options || []).forEach((o) => Object.keys(o.weights || {}).forEach((k) => keys.add(k)));
+  });
+  const max = Math.max(1, ...Object.values(scores), 1);
+  $('live').innerHTML = '<div class="muted" style="margin-bottom:8px">实时剖面（随你的选择变化）</div>' +
+    [...keys].map((k) => {
+      const value = scores[k] || 0;
+      const name = (CUR.dimensions || []).find((d) => d.key === k);
+      return `<div class="livebar"><span>${esc(name ? name.name : k)}</span>
+        <span class="track"><i style="width:${Math.round(value / max * 100)}%"></i></span></div>`;
+    }).join('');
+}
+function renderQuestion(){
+  const item = CUR.items[IDX];
+  $('quiz-pos').textContent = `第 ${IDX + 1} / ${CUR.items.length} 题`;
+  $('bar').style.width = `${Math.round((IDX + 1) / CUR.items.length * 100)}%`;
+  $('qtext').textContent = item.text;
+  const options = CUR.options || item.options.map((o, i) => ({label: o.label, value: i}));
+  const isLast = IDX === CUR.items.length - 1;
+  $('btn-next').textContent = isLast ? '看结果' : '下一题';
+  $('opts').innerHTML = options.map((o, i) => `
+    <button class="opt ${ANSWERS[IDX] === o.value ? 'on' : ''}" data-v="${o.value}">
+      <span class="k">${i + 1}</span><span>${esc(o.label)}</span>
+    </button>`).join('');
+  $('opts').querySelectorAll('.opt').forEach((el) => {
+    el.onclick = () => pick(Number(el.dataset.v));
+  });
+  $('btn-prev').disabled = IDX === 0;
+  liveDims();
+}
+function pick(value){
+  ANSWERS[IDX] = value;
+  renderQuestion();
+  // 选完稍等一下自动前进，手感更顺
+  setTimeout(() => { if (IDX < CUR.items.length - 1){ IDX += 1; renderQuestion(); } }, 180);
+}
+$('btn-prev').onclick = () => { if (IDX > 0){ IDX -= 1; renderQuestion(); } };
+$('btn-next').onclick = () => {
+  if (ANSWERS[IDX] == null){ floatText('先选一个再走喵'); return; }
+  if (IDX < CUR.items.length - 1){ IDX += 1; renderQuestion(); }
+  else submit();
+};
+$('btn-quit').onclick = () => { go('home'); loadScales(); };
+document.addEventListener('keydown', (ev) => {
+  if ($('view-quiz').classList.contains('hidden') || !CUR) return;
+  const tag = (ev.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if (ev.key >= '1' && ev.key <= '9'){
+    const index = Number(ev.key) - 1;
+    const options = CUR.options || CUR.items[IDX].options.map((_, i) => ({value: i}));
+    if (index < options.length) pick(options[index].value);
+  } else if (ev.key === 'Enter'){
+    $('btn-next').click();
+  } else if (ev.key === 'Backspace' || ev.key === 'ArrowLeft'){
+    if (IDX > 0){ IDX -= 1; renderQuestion(); }
+  } else if (ev.key === 'ArrowRight'){
+    $('btn-next').click();
+  }
+});
+
+// ── 提交与结果 ───────────────────────────────────────────────
+let LAST = null;
+async function submit(){
+  try {
+    const res = await api('/api/submit', {scale_id: CUR.id, answers: ANSWERS, ids: CUR.ids || []});
+    if (!res.ok){ alert(res.error); return; }
+    LAST = res;
+    renderResult(res);
+    go('result');
+  } catch (err) { alert(String(err)); }
+}
+function renderResult(res){
+  const type = res.type || {};
+  const kind = res.kind || CUR.kind;
+  const dims = res.dims || [];
+  // 雷达图只给 Likert 多维度量表；强迫选择量表（爱的语言/霍兰德）用占比条更诚实
+  const useRadar = kind === 'dimension' && dims.length >= 3;
+
+  // ── 顶部：类型/名称 + 一句话 + 来源信息 ────────────────────
+  const codeText = (type.code && type.code !== type.name) ? type.code : '';
+  $('r-code').textContent = codeText;
+  $('r-code').classList.toggle('hidden', !codeText);
+  $('r-name').textContent = type.name || res.name || '';
+  $('r-sum').textContent = type.summary || res.advice || '';
+  const bankInfo = res.bank_size
+    ? `本次 ${res.items_used || CUR.items.length} 题 / 题库 ${res.bank_size} 题`
+    : `${CUR.items.length} 题`;
+  $('r-meta').textContent = `${CUR.name} · ${bankInfo} · 来源：${CUR.source}`;
+
+  // 配图：按结果类型换 emoji 与配色（emoji + 渐变，不引外部图）
+  const art = res.art || {};
+  const banner = $('hero-art');
+  banner.style.setProperty('--art-a', art.from || '#8d7ff3');
+  banner.style.setProperty('--art-b', art.to || '#5ec8f0');
+  $('hero-emoji').textContent = art.emoji || '🧩';
+
+  // ── 为什么是这个结果 ───────────────────────────────────────
+  const cands = res.candidates || [];
+  if (kind === 'type' && cands.length){
+    const max = Math.max(...cands.map((c) => c.percent), 1);
+    $('why-title').textContent = '你的各项占比（为什么是这个结果）';
+    let html = cands.slice(0, 9).map((c, i) => `
+      <div class="cand ${i === 0 ? 'top' : ''}">
+        <span class="nm">${esc(c.name)}</span>
+        <span class="track"><i style="width:${Math.round(c.percent / max * 100)}%"></i></span>
+        <span class="pc">${c.percent}%</span>
+        ${c.tip ? `<span class="tip">${esc(c.tip)}</span>` : ''}
+      </div>`).join('');
+    if (cands.length > 1 && cands[1].percent >= 25){
+      html += `<div class="notice">你的第二高是「${esc(cands[1].name)}」（${cands[1].percent}%）。
+        两者接近说明你同时具有两种倾向——类型本来就是连续谱，不必非此即彼。</div>`;
+    }
+    $('why-box').innerHTML = html;
+  } else if (dims.length === 1){
+    // 单维度量表：用一根双向刻度，两端写清楚，比"55% · 中间地带"好懂
+    const d = dims[0];
+    const meta = (CUR.dimensions || []).find((x) => x.key === d.key) || {};
+    const band = d.percent >= 66 ? (meta.high || '偏高') : (d.percent <= 33 ? (meta.low || '偏低') : '中间地带');
+    $('why-title').textContent = '你的位置';
+    $('why-box').innerHTML = `<div class="gauge">
+      <div class="gauge-top"><span>${esc(meta.low || '偏低')}</span><span>${esc(meta.high || '偏高')}</span></div>
+      <div class="gauge-track"><span class="gauge-mid"></span><i style="left:${d.percent}%"></i></div>
+      <div class="gauge-val">${d.percent}% · ${esc(band)}</div>
+      ${(d.tip || meta.tip) ? `<div class="muted" style="text-align:center">${esc(d.tip || meta.tip)}</div>` : ''}
+    </div>`;
+  } else if (dims.length){
+    const labels = new Map((CUR.dimensions || []).map((d) => [d.key, d]));
+    $('why-title').textContent = '各维度得分';
+    $('why-box').innerHTML = dims.map((d) => {
+      const meta = labels.get(d.key) || {};
+      const name = d.name || meta.name || d.key;
+      const isShare = d.percent_kind === 'share';
+      const band = isShare ? '占你选择的比例'
+        : (d.percent >= 66 ? (meta.high || '偏高') : (d.percent <= 33 ? (meta.low || '偏低') : '中间地带'));
+      return `<div class="framebox">
+        <div class="fb-top">
+          <span class="fb-name">${esc(name)}</span>
+          <span class="fb-val">${d.percent}%${isShare ? ' · ' + esc(band) : ' · ' + esc(band)}</span>
+        </div>
+        <div class="track"><i style="width:${d.percent}%"></i></div>
+        ${(d.tip || meta.tip) ? `<div class="fb-tip">${esc(d.tip || meta.tip)}</div>` : ''}
+      </div>`;
+    }).join('');
+  } else {
+    $('why-title').textContent = '得分';
+    $('why-box').innerHTML = '';
+  }
+
+  // ── 长处 / 盲点 / 分级建议 ─────────────────────────────────
+  let extra = '';
+  if (type.strengths || type.blind_spot){
+    extra += `<div class="two" style="margin-top:12px">
+      ${type.strengths ? `<div class="card" style="box-shadow:none;background:rgba(233,250,241,.6);padding:12px 15px">
+        <b>长处</b><div class="muted" style="margin-top:4px">${esc(type.strengths)}</div></div>` : ''}
+      ${type.blind_spot ? `<div class="card" style="box-shadow:none;background:rgba(255,244,219,.6);padding:12px 15px">
+        <b>要留意</b><div class="muted" style="margin-top:4px">${esc(type.blind_spot)}</div></div>` : ''}
+    </div>`;
+  }
+  if (res.extended){
+    extra += `<div class="notice" style="margin-top:12px">扩展自评：这份结果<b>不是</b>官方量表计分（你答的题数超过了官方题目），
+      分数只表示你在这批陈述上的同意程度，不套用官方分级。</div>`;
+  }
+  if (res.level){
+    extra += `<div class="notice ${res.total >= 10 ? 'bad' : ''}" style="margin-top:12px">
+      分级：<b>${esc(res.level)}</b>（总分 ${res.total}）｜${esc(res.advice || '')}</div>`;
+  }
+  // 维度长文解读
+  const notes = res.notes || [];
+  if (notes.length){
+    extra += `<div class="hr"></div><div class="sec-h" style="margin-top:0">这意味着什么</div>` +
+      notes.map((note) => `<div class="framebox">
+        <div class="fb-name">${esc(note.title)}</div>
+        <div class="fb-tip">${esc(note.text)}</div></div>`).join('');
+  }
+  // 可执行建议
+  const advices = res.advices || [];
+  if (advices.length){
+    extra += `<div class="hr"></div><div class="sec-h" style="margin-top:0">可以做的三件事</div>
+      <div class="framebox"><ul class="tips" style="margin:0">${advices.map((a) => `<li>${esc(a)}</li>`).join('')}</ul></div>`;
+  }
+  // 这份结果怎么算的（算法口径，明明白白）
+  if (res.method){
+    extra += `<div class="hr"></div><details class="howto"><summary>这份结果是怎么算出来的</summary>
+      <div class="fb-tip" style="margin-top:8px">${esc(res.method)}</div>
+      <div class="fb-tip">题库 ${res.bank_size || '—'} 题，本次使用 ${res.items_used || '—'} 题${res.official ? '（官方原题与官方分级）' : (res.extended ? '（扩展自评）' : '（随机抽样）')}。</div>
+    </details>`;
+  }
+  if (kind === 'dimension' && dims.length === 1){
+    extra += `<div class="notice" style="margin-top:12px">这项是单维度量表：分数只说明相对位置，
+      不代表好坏。把它当成一个可以慢慢调整的刻度，而不是标签。</div>`;
+  }
+  $('extra').innerHTML = extra;
+
+  // ── 风险提示（PHQ-9 第 9 题）──────────────────────────────
+  $('risk-box').innerHTML = res.risk ? `<div class="notice bad"><b>请先看这里：</b>你在这份量表里勾选了与自我伤害相关的选项。
+    这不需要一个人扛——请联系专业人士或热线：${(res.crisis_lines || []).map((l) => `<div>${esc(l)}</div>`).join('')}
+    <div>如果情况紧急，请立刻拨打 120 / 110。</div></div>` : '';
+
+  // ── 剖面图：只有多维量表才画 ──────────────────────────────
+  $('radar-block').classList.toggle('hidden', !useRadar);
+  if (useRadar) drawRadar(dims);
+}
+
+function drawRadar(dims){
+  const canvas = $('radar');
+  const ctx = canvas.getContext('2d');
+  const size = Math.max(240, Math.min(320, canvas.clientWidth || 280));
+  canvas.width = size * window.devicePixelRatio;
+  canvas.height = size * window.devicePixelRatio;
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size / 2 - 34;
+  ctx.clearRect(0, 0, size, size);
+  const n = dims.length;
+  if (n < 3){
+    ctx.fillStyle = '#857da6';
+    ctx.font = '14px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('该量表为单维度结果', cx, cy);
+    return;
+  }
+  // 网格
+  ctx.strokeStyle = 'rgba(109,92,224,.16)';
+  ctx.lineWidth = 1;
+  for (let ring = 1; ring <= 4; ring++){
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++){
+      const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
+      const radius = (r * ring) / 4;
+      const x = cx + Math.cos(angle) * radius;
+      const y = cy + Math.sin(angle) * radius;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+  for (let i = 0; i < n; i++){
+    const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
+    ctx.stroke();
+  }
+  // 数据
+  const labels = new Map((CUR.dimensions || []).map((d) => [d.key, d]));
+  ctx.beginPath();
+  dims.forEach((d, i) => {
+    const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
+    const radius = (r * Math.max(6, d.percent)) / 100;
+    const x = cx + Math.cos(angle) * radius;
+    const y = cy + Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(109,92,224,.22)';
+  ctx.fill();
+  ctx.strokeStyle = '#6d5ce0';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // 顶点与标签
+  dims.forEach((d, i) => {
+    const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
+    const radius = (r * Math.max(6, d.percent)) / 100;
+    const x = cx + Math.cos(angle) * radius;
+    const y = cy + Math.sin(angle) * radius;
+    ctx.beginPath();
+    ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#6d5ce0';
+    ctx.fill();
+    const lx = cx + Math.cos(angle) * (r + 20);
+    const ly = cy + Math.sin(angle) * (r + 20);
+    ctx.fillStyle = '#4d4670';
+    ctx.font = '12px system-ui, "Microsoft YaHei"';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText((labels.get(d.key) || {}).name || d.key, lx, ly);
+  });
+}
+$('btn-again').onclick = () => { if (CUR) startScale(CUR.id); };
+$('btn-back').onclick = () => { go('home'); loadScales(); };
+$('btn-copy').onclick = async () => {
+  const res = LAST || {};
+  const type = res.type || {};
+  const lines = [`${res.name}`, `结果：${type.name || ''}${type.code ? `（${type.code}）` : ''}`,
+    type.summary || '', '', ...(res.dims || []).map((d) => `${d.key}: ${d.percent}%`)];
+  if (res.level) lines.push('', `等级：${res.level}（总分 ${res.total}）`);
+  lines.push('', '（本结果仅供自我了解，不构成医学诊断）');
+  const text = lines.filter(Boolean).join('\n');
+  try { await navigator.clipboard.writeText(text); floatText('已复制'); }
+  catch (err) { floatText('复制失败，请手动选择'); }
+};
+$('btn-card').onclick = async () => {
+  const res = LAST || {};
+  const type = res.type || {};
+  const canvas = document.createElement('canvas');
+  canvas.width = 1000;
+  canvas.height = 560;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 1000, 560);
+  grad.addColorStop(0, '#f3f1ff');
+  grad.addColorStop(1, '#eaf2ff');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 1000, 560);
+  const art = res.art || {};
+  const band = ctx.createLinearGradient(0, 0, 1000, 0);
+  band.addColorStop(0, art.from || '#8d7ff3');
+  band.addColorStop(1, art.to || '#5ec8f0');
+  ctx.fillStyle = band;
+  ctx.fillRect(0, 0, 1000, 12);
+  ctx.font = '64px system-ui, "Segoe UI Emoji"';
+  ctx.fillText(art.emoji || '🧩', 860, 150);
+  ctx.fillStyle = '#6d5ce0';
+  ctx.font = '600 26px system-ui, "Microsoft YaHei"';
+  ctx.fillText(res.name || '', 60, 74);
+  ctx.fillStyle = '#2f2850';
+  ctx.font = '700 60px system-ui, "Microsoft YaHei"';
+  ctx.fillText(type.name || '结果', 60, 168);
+  if (type.code && type.code !== type.name){
+    ctx.fillStyle = '#9b8bf7';
+    ctx.font = '500 28px monospace';
+    ctx.fillText(type.code, 60, 214);
+  }
+  ctx.fillStyle = '#4d4670';
+  ctx.font = '24px system-ui, "Microsoft YaHei"';
+  const summary = type.summary || res.advice || '';
+  let y = 268;
+  for (let i = 0; i < summary.length && y < 380; i += 22){
+    ctx.fillText(summary.slice(i, i + 22), 60, y);
+    y += 34;
+  }
+  (res.candidates || res.dims || []).slice(0, 4).forEach((d, i) => {
+    const by = 400 + i * 32;
+    ctx.fillStyle = '#857da6';
+    ctx.font = '20px system-ui, "Microsoft YaHei"';
+    ctx.fillText(String(d.name || d.key || '').slice(0, 6), 60, by);
+    const pct = Number(d.percent || 0);
+    ctx.fillStyle = 'rgba(109,92,224,.16)';
+    ctx.fillRect(220, by - 14, 660, 14);
+    ctx.fillStyle = '#6d5ce0';
+    ctx.fillRect(220, by - 14, 660 * (pct / 100), 14);
+    ctx.fillStyle = '#857da6';
+    ctx.font = '18px monospace';
+    ctx.fillText(pct + '%', 890, by);
+  });
+  ctx.fillStyle = '#9b93b8';
+  ctx.font = '18px system-ui, "Microsoft YaHei"';
+  ctx.fillText('心理测评室 · 仅供自我了解，不构成医学诊断', 60, 528);
+
+  // ① 面板内预览（先让用户看得见，不再依赖下载）
+  let dataUrl = '';
+  try { dataUrl = canvas.toDataURL('image/png'); }
+  catch (err) { floatText('画布导出失败'); return; }
+  $('card-img').src = dataUrl;
+  $('card-path').textContent = '正在保存到本机…';
+  $('card-modal').classList.remove('hidden');
+
+  // ② 顺手复制到剪贴板（chromium 支持图片剪贴板，能直接粘到聊天框）
+  try {
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (blob && navigator.clipboard && window.ClipboardItem){
+      await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+    }
+  } catch (err) { /* 剪贴板被拒也不影响其它两条路 */ }
+
+  // ③ 交给插件后端落盘（内嵌 webview 里 <a download> 经常被吞）
+  try {
+    const saved = await api('/api/card', {image: dataUrl, name: `${res.scale_id || 'result'}-${type.name || ''}`});
+    $('card-path').textContent = saved.ok
+      ? `已保存到：${saved.path}`
+      : `自动保存失败：${saved.error || '未知原因'}（可在图片上右键另存）`;
+  } catch (err) {
+    $('card-path').textContent = `自动保存失败：${err}（可在图片上右键另存）`;
+  }
+};
+$('card-close').onclick = () => $('card-modal').classList.add('hidden');
+$('card-copy').onclick = async () => {
+  try {
+    const res = LAST || {};
+    const img = $('card-img');
+    const blob = await (await fetch(img.src)).blob();
+    if (navigator.clipboard && window.ClipboardItem){
+      await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+      floatText('已复制图片');
+    } else { floatText('这个环境不支持复制图片，请右键另存'); }
+  } catch (err) { floatText('复制失败，请右键另存'); }
+};
+$('card-path-copy').onclick = async () => {
+  const text = $('card-path').textContent.replace(/^已保存到：/, '').trim();
+  try { await navigator.clipboard.writeText(text); floatText('路径已复制'); }
+  catch (err) { floatText('复制失败'); }
+};
+
+// ── 记录 ─────────────────────────────────────────────────────
+async function loadRecords(){
+  const scaleId = $('filter-scale').value;
+  try {
+    const res = await api('/api/records', {scale_id: scaleId});
+    const rows = res.records || [];
+    $('records').innerHTML = rows.length ? rows.map((row) => `
+      <div class="rec">
+        <div>
+          <div class="t">${esc(row.name)}</div>
+          <div class="m">${esc(row.time)} ${row.level ? '· ' + esc(row.level) : ''} ${row.type && row.type.name ? '· ' + esc(row.type.name) : ''}</div>
+        </div>
+        <div class="act">
+          <button class="ghost tiny" data-open="${esc(row.id)}">看趋势</button>
+          <button class="ghost tiny" data-del="${esc(row.id)}">删除</button>
+        </div>
+      </div>`).join('') : '<div class="muted">还没有记录，去做一份量表吧。</div>';
+    $('records').querySelectorAll('[data-del]').forEach((el) => {
+      el.onclick = async () => { await api('/api/records/delete', {id: el.dataset.del}); loadRecords(); loadScales(); };
+    });
+    $('records').querySelectorAll('[data-open]').forEach((el) => { el.onclick = () => showTrend(el.dataset.open); });
+    if (!scaleId) $('trend').innerHTML = '';
+  } catch (err) { $('records').innerHTML = esc(String(err)); }
+}
+async function showTrend(recordId){
+  const row = await (async () => {
+    const res = await api('/api/records', {});
+    return (res.records || []).find((r) => String(r.id) === String(recordId));
+  })();
+  if (!row) return;
+  const res = await api('/api/history', {scale_id: row.scale_id});
+  const history = res.history || [];
+  if (history.length < 1){ $('trend').innerHTML = '<div class="muted">这份量表只有一次记录。</div>'; return; }
+  const max = Math.max(1, ...history.map((h) => Number(h.total || 0)));
+  $('trend').innerHTML = `<div class="muted" style="margin-top:12px">《${esc(row.name)}》历次总分</div><div class="trend">` +
+    history.map((h) => `<div class="col">
+      <div class="bar" style="height:${Math.round(Number(h.total || 0) / max * 100)}px"></div>
+      <div class="lb">${esc(String(h.time || '').slice(5))}</div></div>`).join('') + '</div>';
+}
+$('filter-scale').onchange = loadRecords;
+$('btn-export').onclick = async () => {
+  const res = await api('/api/export', {});
+  const text = res.text || '';
+  try { await navigator.clipboard.writeText(text); floatText('已复制到剪贴板'); }
+  catch (err) { floatText('复制失败'); }
+};
+$('btn-clear').onclick = async () => {
+  if (!confirm('清空所有测评记录？这一步不可撤销。')) return;
+  await api('/api/records/clear', {});
+  loadRecords();
+  loadScales();
+};
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => { if (tab.dataset.tab === 'records') loadRecords(); });
+});
+
+// ── 启动 ─────────────────────────────────────────────────────
+(async () => {
+  await loadScales();
+  try {
+    const res = await api('/api/prefs', {});
+    if (res.prefs){ PREFS = Object.assign({}, PREFS, res.prefs); applyPrefs(); applyBackground(); }
+  } catch (err) { /* 偏好读不到就用默认 */ }
+  $('crisis').innerHTML = CRISIS.map((l) => `<li>${esc(l)}</li>`).join('');
+})();
+</script>
+</body>
+</html>
