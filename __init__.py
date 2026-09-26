@@ -46,7 +46,8 @@ try:
         lifecycle,
         llm_tool,
         message,
-        )
+        neko_plugin,
+    )
 
     from ._engine import score
     from ._panel import PanelServer, find_open_port, guess_mime
@@ -71,6 +72,7 @@ _PREFS_DEFAULT = {
 _mark('before-class')
 
 
+@neko_plugin
 class AssessmentPlugin(NekoPluginBase):
     _mark('class-enter')
     def __init__(self, ctx):
