@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -36,7 +37,7 @@ class RecordStore:
     def add(self, scale_id: str, name: str, kind: str, result: dict, answers: list) -> dict:
         rows = self._load()
         record = {
-            "id": f"{int(time.time() * 1000)}",
+            "id": f"{int(time.time() * 1000)}{uuid.uuid4().hex[:6]}",
             "time": time.strftime("%Y-%m-%d %H:%M"),
             "ts": int(time.time()),
             "scale_id": scale_id,
