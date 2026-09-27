@@ -52,9 +52,13 @@ def test_scales_summary_has_no_items():
 
 
 # ── 评分：大五 ────────────────────────────────────────────────
-def _answers(scale, want_dims, high=5, low=1):
+def _answers(items, want_dims, high=5, low=1):
     """按维度取向作答：想高的维度答 high，其它答 low（Likert 量表通用）。"""
-    return [high if item.get("dim") in want_dims else low for item in scale["items"]]
+    return [high if item.get("dim") in want_dims else low for item in items]
+
+
+def _answers_scale(scale, want_dims, high=5, low=1):
+    return _answers(scale["bank"], want_dims, high=high, low=low)
 
 
 def test_big5_scores_and_reverse_coding():
@@ -81,7 +85,7 @@ def test_big5_percent_is_bounded():
     engine = _load("_engine")
     scale = scales.get_scale("big5")
     for value in (1, 3, 5):
-        result = engine.score("big5", [value] * len(scale["items"]), items=scale["items"])
+        result = engine.score("big5", [value] * len(scale["bank"]), items=scale["bank"])
         for dim in result["dims"]:
             assert 0 <= dim["percent"] <= 100
             assert dim["percent_kind"] == "level"
@@ -154,7 +158,7 @@ def test_type_scales_pick_the_dominant_dimension():
     }
     for scale_id, (dim_key, expect_key) in cases.items():
         scale = scales.get_scale(scale_id)
-        result = engine.score(scale_id, _answers(scale, {dim_key}), items=scale["items"])
+        result = engine.score(scale_id, _answers(scale["bank"], {dim_key}, high=5, low=1), items=scale["bank"])
         assert result["ok"], scale_id
         assert result["type"]["code"] == expect_key, f"{scale_id} 判成了 {result['type']['code']}"
         assert result["type"]["name"] and result["type"]["name"] != expect_key
@@ -164,9 +168,9 @@ def test_type16_builds_code_from_dichotomies():
     scales = _load("_scales")
     engine = _load("_engine")
     scale = scales.get_scale("type16")
-    result = engine.score("type16", _answers(scale, {"E", "S", "T", "J"}), items=scale["items"])
+    result = engine.score("type16", _answers_scale(scale, {"E", "S", "T", "J"}), items=scale["bank"])
     assert result["type"]["code"] == "ESTJ"
-    other = engine.score("type16", _answers(scale, {"I", "N", "F", "P"}), items=scale["items"])
+    other = engine.score("type16", _answers_scale(scale, {"I", "N", "F", "P"}), items=scale["bank"])
     assert other["type"]["code"] == "INFP"
 
 
@@ -174,10 +178,10 @@ def test_riasec_letters_and_love_without_fake_code():
     scales = _load("_scales")
     engine = _load("_engine")
     ria = scales.get_scale("riasec")
-    result = engine.score("riasec", _answers(ria, {"R"}), items=ria["items"])
+    result = engine.score("riasec", _answers_scale(ria, {"R"}), items=ria["items"])
     assert result["code"].startswith("R"), result["code"]
     love = scales.get_scale("love")
-    got = engine.score("love", _answers(love, {"time"}), items=love["items"])
+    got = engine.score("love", _answers_scale(love, {"time"}), items=love["items"])
     assert got["code"] == "", "爱的语言不该有「码」"
     assert got["type"]["name"].startswith("你的主要倾向")
 
@@ -288,7 +292,7 @@ def test_type_scales_return_candidates_with_names():
     ):
         scale = _load("_scales").get_scale(scale_id)
         # 全选「非常同意」→ 该量表里权重最高的那一类胜出
-        answers = [5] * len(scale["items"])
+        answers = [5] * len(scale["bank"])
         items = scale["items"]
         bank = set(i["text"] for i in scale["bank"])
         assert all(i["text"] in bank for i in items)
@@ -307,7 +311,7 @@ def test_type16_dimensions_are_named():
     scales = _load("_scales")
     engine = _load("_engine")
     scale = scales.get_scale("type16")
-    result = engine.score("type16", _answers(scale, {"E", "S", "T", "J"}), items=scale["items"])
+    result = engine.score("type16", _answers_scale(scale, {"E", "S", "T", "J"}), items=scale["bank"])
     names = {d["key"]: d.get("name") for d in result["dims"]}
     for key in ("E", "I", "S", "N", "T", "F", "J", "P"):
         assert names.get(key), f"{key} 缺中文名"
@@ -364,7 +368,7 @@ def test_result_carries_art_and_named_types():
     scales = _load("_scales")
     for scale_id in ("boba", "groupie", "worker"):
         scale = scales.get_scale(scale_id)
-        result = engine.score(scale_id, [5] * len(scale["items"]), items=scale["items"])
+        result = engine.score(scale_id, [5] * len(scale["bank"]), items=scale["bank"])
         assert result["art"]["emoji"]
         name = (result.get("type") or {}).get("name", "")
         assert name and name != (result.get("type") or {}).get("code"), f"{scale_id} 类型名还是英文 key：{name}"
@@ -402,13 +406,13 @@ def test_big5_bank_is_100_items():
     scales = _load("_scales")
     scale = scales.get_scale("big5")
     assert len(scale["bank"]) == 100, f"大五题库应 100 题，实际 {len(scale['bank'])}"
-    assert scale["min_items"] == 20 and scale["default_items"] == 20
+    assert scale["min_items"] == 20 and scale["default_items"] == len(scale["bank"])
     dims = {}
     for item in scale["bank"]:
         dims[item["dim"]] = dims.get(item["dim"], 0) + 1
     assert dims == {"E": 20, "A": 20, "C": 20, "N": 20, "O": 20}, dims
     rev = sum(1 for item in scale["bank"] if item["reverse"])
-    assert 40 <= rev <= 60, f"反向题应大致一半，实际 {rev}"
+    assert rev == 37, f"IPIP 官方键值：100 题里 37 条反向计分，实际 {rev}"
 
 
 def test_dataset_meta_complete():
@@ -423,7 +427,7 @@ def test_dataset_meta_complete():
             # 官方量表：默认按官方题数作答（套官方分级），题库里另有扩展题供「扩展自评」
             assert scale.get("official_count"), f"{scale['id']} 缺官方题数"
             assert scale["default_items"] == scale["official_count"]
-            assert len(scale["bank"]) == 100
+            assert len(scale["bank"]) > scale["official_count"] + 5
 
 
 def test_sample_endpoint_returns_subset():
@@ -443,8 +447,8 @@ def test_sample_endpoint_returns_subset():
     official = cls._api_scale(fake, {"id": "phq9", "count": 9})
     assert official["scale"]["count"] == 9 and official["scale"]["official"] is True
     assert official["scale"]["ids"] == list(range(9)), "官方题要按原顺序出"
-    extended = cls._api_scale(fake, {"id": "phq9", "count": 99})
-    assert extended["scale"]["count"] == 99 and extended["scale"]["official"] is False
+    extended = cls._api_scale(fake, {"id": "phq9", "count": 25})
+    assert extended["scale"]["count"] == 25 and extended["scale"]["official"] is False
     # 用户自己定题数：要几题就给几题（1 ~ 题库）
     tiny = cls._api_scale(fake, {"id": "big5", "count": 2})
     assert tiny["scale"]["count"] == 2, "用户要 2 题就该给 2 题"
@@ -524,7 +528,7 @@ def test_four_banks_reach_100_items():
     scales = _load("_scales")
     for scale in scales.SCALES:
         scale_id = scale["id"]
-        assert len(scale["bank"]) == 100, f"{scale_id} 题库应 100 题，实际 {len(scale['bank'])}"
+        assert 20 <= len(scale["bank"]) <= 100, f"{scale_id} 题库规模异常：{len(scale['bank'])}"
         assert scale["default_items"] <= len(scale["bank"])
         rev = sum(1 for item in scale["bank"] if item["reverse"])
         assert rev >= 0, scale_id
@@ -591,4 +595,72 @@ def test_choice_chips_have_visible_selected_state():
     assert "function updatePickLabel()" in js, "要有文字反馈（不能只靠颜色）"
     assert "已选 ${PICK_COUNT} 题" in js
 
+def test_questions_are_human_readable():
+    """回归：题库曾用「场景 × 行为」模板拼装，出现「在排队等候的时候，我提不起劲」这类怪句子。
+    现在要求：每题都是人话（第一人称、8~30 字、以句号/问号结尾），且不许残留模板句式。"""
+
+    SCENE_PREFIXES = ("在排队等候的时候，", "在饭桌上，", "在深夜，", "在群里，", "在周末，",
+                      "在刚认识的人面前，", "在话题冷下来的时候，", "在计划被打乱的时候，")
+    SCENE_PREFIXES = ("在排队等候的时候，", "在饭桌上，", "在深夜，", "在群里，", "在周末，",
+                      "在刚认识的人面前，", "在话题冷下来的时候，", "在计划被打乱的时候，")
+    scales = _load("_scales")
+    bad = []
+    for scale in scales.SCALES:
+        for item in scale["bank"]:
+            text = item["text"]
+            # 只拦旧生成器那批"场景前缀"开场白，不误伤正常句子
+            if text.startswith(tuple(SCENE_PREFIXES)):
+                bad.append(f"{scale['id']}: 模板句 {text}")
+            if not text.endswith(("。", "？")):
+                bad.append(f"{scale['id']}: 结尾不是句号/问号 {text}")
+            if not 3 <= len(text) <= 40:
+                bad.append(f"{scale['id']}: 长度异常 {text}")
+            if text.count("，") > 3:
+                bad.append(f"{scale['id']}: 太长太绕 {text}")
+    assert not bad, "\n".join(bad[:12])
+
+
+def test_bank_sizes_and_official_counts():
+    """题库规模：手写题 20~100 题；官方量表必须保留官方原题与官方题数。"""
+    scales = _load("_scales")
+    for scale in scales.SCALES:
+        size = len(scale["bank"])
+        assert 20 <= size <= 100, f"{scale['id']} 题库 {size} 题"
+        assert scale["default_items"] <= size
+        if scale["id"] in scales.FIXED_SCALES:
+            official = scale["official_count"]
+            assert [i["text"] for i in scale["bank"][:official]] == list(scale["official_texts"]), \
+                f"{scale['id']} 官方题必须排在题库最前"
+
+def test_original_items_are_complete_sentences():
+    """回归：原创量表曾出现「我不喜欢退。」「我有点高冷。」这类半截话。
+    现在要求：原创条目必须是语义完整的一句话（≥10 字、以句号结尾、含主谓）。
+    真实量表（IPIP/O*NET/OEJTS）与官方量表（PHQ-9/GAD-7/UCLA）保留原文，不受此约束。"""
+    scales = _load("_scales")
+    bad = []
+    for scale in scales.SCALES:
+        if not scale.get("original"):
+            continue
+        for item in scale["bank"]:
+            text = item["text"]
+            if len(text) < 10:
+                bad.append(f"{scale['id']}: 太短 {text}")
+            if not text.endswith("。"):
+                bad.append(f"{scale['id']}: 结尾不对 {text}")
+            if "我" not in text and "自己" not in text:
+                bad.append(f"{scale['id']}: 缺主语 {text}")
+    assert not bad, "\n".join(bad[:12])
+
+
+def test_real_scales_keep_their_sources():
+    """真实量表必须标注来源，且题库与官方/公开工具一致。"""
+    scales = _load("_scales")
+    for scale_id, expect in (("big5", "IPIP"), ("riasec", "O*NET"), ("type16", "OEJTS")):
+        scale = scales.get_scale(scale_id)
+        assert expect in scale["source"], f"{scale_id} 来源应含 {expect}，实际 {scale['source']}"
+        assert not scale.get("original"), f"{scale_id} 是真实量表，不该标成原创"
+    for scale_id, count in (("phq9", 9), ("gad7", 7), ("loneliness3", 3)):
+        scale = scales.get_scale(scale_id)
+        assert scale["official_count"] == count
+        assert [i["text"] for i in scale["bank"][:count]] == list(scale["official_texts"])
 

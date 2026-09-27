@@ -15,9 +15,12 @@ from __future__ import annotations
 
 from ._bank import BIG5_BANK
 from ._bank2 import EQ_BANK, RESIL_BANK, SOCIAL_BANK
-from ._bank3 import BANKS as _BANKS3
-from ._bank3 import OFFICIAL as OFFICIAL_SCALES
-from ._bank4 import FUN_BANKS as _FUN_BANKS
+from ._bank_human import BANKS as _BANKS3
+from ._bank_human import OFFICIAL as OFFICIAL_SCALES
+from ._bank_origin2 import BANKS as _FUN_BANKS
+from ._bank_origin2 import FIXUPS as _ORIGIN_FIXUPS
+from ._bank_real import BANKS as _REAL_BANKS
+from ._bank_real import SOURCE as _REAL_SOURCE
 
 # ── 通用选项组 ────────────────────────────────────────────────
 LIKERT_ACCURACY = [
@@ -1536,3 +1539,55 @@ for _scale in SCALES:
         # 官方量表必须用官方选项（0=完全没有 ~ 3=几乎每天），否则官方分级阈值全错
         _scale["options"] = FREQ_WEEK
         _scale["method"] = _METHOD_SHORT["clinical"]
+
+
+# ════════════════════════════════════════════════════════════
+# 真实量表题库接入：大五（IPIP 100 题）、职业兴趣（O*NET 60 题）、16 型（OEJTS 32 题）
+#   这些是**照搬公开工具的原题**（不是自编），来源与许可见 _bank_real.py
+# ════════════════════════════════════════════════════════════
+INTEREST_5 = [
+    {"label": "很不喜欢", "value": 1},
+    {"label": "不太喜欢", "value": 2},
+    {"label": "一般", "value": 3},
+    {"label": "喜欢", "value": 4},
+    {"label": "很喜欢", "value": 5},
+]
+
+for _scale in SCALES:
+    _real = _REAL_BANKS.get(_scale["id"])
+    if not _real:
+        continue
+    _scale["bank"] = _real
+    _scale["items"] = _real[: len(_real)]          # 默认就是原量表的全部题目
+    _scale["default_items"] = len(_real)
+    _scale["source"] = _REAL_SOURCE.get(_scale["id"], _scale["source"])
+    if _scale["id"] == "riasec":
+        _scale["options"] = INTEREST_5             # 原量表是「你愿意做这件事吗」
+        _scale["method"] = "按兴趣作答（很不喜欢~很喜欢）；六个兴趣区各取平均分，得分最高的三类组成兴趣码。题目取自 O*NET Interest Profiler 原题。"
+    elif _scale["id"] == "type16":
+        _scale["options"] = AGREE_5
+        _scale["method"] = "五点同意度；四个二分维度各取分差，得到四字母类型。题目取自 OEJTS 1.2 原题（非 MBTI）。"
+    else:
+        _scale["method"] = "五点计分；反向题先翻转再相加，换算成该维度百分比。题目取自 IPIP 公共领域题库。"
+
+
+# ════════════════════════════════════════════════════════════
+# 原创题库重写版接入 + 把偏短的条目补成完整句子
+#   （参照 IPIP 那种「第一人称完整行为陈述」的写法，避免半截话）
+# ════════════════════════════════════════════════════════════
+_REAL_IDS = set(_REAL_BANKS)
+
+for _scale in SCALES:
+    _bank = _FUN_BANKS.get(_scale["id"])
+    if _bank:
+        _scale["bank"] = _bank
+        _scale["items"] = _bank[: _scale["default_items"]]
+    if _scale["id"] in _REAL_IDS or _scale["id"] in FIXED_SCALES:
+        continue    # 真实量表 / 官方量表：题为原样照搬，不受"必须是完整长句"约束
+    # 把已知偏短的条目替换成完整句子（跨所有原创量表）
+    for _item in _scale["bank"]:
+        _fixed = _ORIGIN_FIXUPS.get(_item["text"])
+        if _fixed:
+            _item["text"] = _fixed
+    _scale["items"] = _scale["bank"][: _scale["default_items"]]
+    _scale["original"] = True          # 标记：原创条目（没有公开量表可照搬）
