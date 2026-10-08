@@ -355,6 +355,15 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 details.more{margin-top:10px}
 details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
 
+/* ── 默契测试 ──────────────────────────────────────────────── */
+.cm-lab{font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-sm);margin:14px 0 8px}
+.cm-tag{display:inline-block;padding:2px 10px;border-radius:999px;font-size:var(--fs-2xs);
+  background:rgba(109,92,224,.12);color:#5b4fc4;margin:2px 4px 2px 0}
+.cm-pair{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:var(--fs-sm);color:var(--ink2)}
+.cm-pair b{color:#3a3260;font-weight:600}
+.cm-pair .hit{color:var(--ok)}
+@media (max-width:640px){.cm-pair{grid-template-columns:1fr}}
+
 @media (max-width:820px){
   .layout{grid-template-columns:1fr}
   .rail{position:static;flex-direction:row;overflow-x:auto;border-radius:18px}
@@ -396,6 +405,9 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
       </button>
       <button class="tab" data-tab="play">
         <svg viewBox="0 0 24 24"><path d="M5 11h14l-1.5 8.5a2 2 0 0 1-2 1.5h-7a2 2 0 0 1-2-1.5z"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/><path d="M9.5 15.5l5-3M11 18l4.5-2.5"/></svg><span>解压</span>
+      </button>
+      <button class="tab" data-tab="compat">
+        <svg viewBox="0 0 24 24"><path d="M8.5 13.5a3.5 3.5 0 1 1 0-7c2.5 0 4.5 4 7 4a3.5 3.5 0 1 1 0 7c-2.5 0-4.5-4-7-4z"/><path d="M12 4v2M12 18v2"/></svg><span>默契</span>
       </button>
       <button class="tab" data-tab="about">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.8"/></svg><span>关于</span>
@@ -623,6 +635,66 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
         </div>
       </div>
 
+      <!-- 默契测试 -->
+      <div id="view-compat" class="hidden">
+        <div class="card" id="cm-intro">
+          <h2>你和 YUI 的默契度</h2>
+          <div class="muted" style="margin-bottom:11px">
+            一轮 10 题，每题答两问：<b>你自己选什么</b>，再<b>猜 YUI 会选什么</b>。
+            你答题的同时她也在独立作答——模型在线时是她现场想的，断线时用离线档案并会<b>明确标注</b>。
+            双方都交卷才同时揭晓，谁也偷看不了谁。题库 60 题全自写，结果只存本机。
+          </div>
+          <div class="row">
+            <button id="cm-start">🐾 开始一轮</button>
+            <span class="status" id="st-compat"></span>
+          </div>
+          <div class="muted" style="margin:13px 0 7px">历史轮次</div>
+          <div id="cm-history"></div>
+        </div>
+
+        <div class="card hidden" id="cm-answer">
+          <div class="row" style="justify-content:space-between">
+            <div style="font-family:var(--font-ui);color:#3a3260">第 <b id="cm-pos">1</b> / <span id="cm-total">10</span> 题</div>
+            <button class="ghost tiny" id="cm-quit">放弃这轮</button>
+          </div>
+          <div class="progress"><i id="cm-bar"></i></div>
+          <div class="qwrap">
+            <div class="muted" id="cm-cat">—</div>
+            <h3 class="q" id="cm-qtext">—</h3>
+            <div class="cm-lab">你自己选</div>
+            <div class="opts" id="cm-opts-own"></div>
+            <div class="cm-lab">你猜 YUI 会选</div>
+            <div class="opts" id="cm-opts-guess"></div>
+          </div>
+          <div class="row" style="justify-content:space-between;margin-top:14px">
+            <button class="ghost" id="cm-prev">上一题</button>
+            <div class="muted">两问都选了才能继续</div>
+            <button id="cm-next">下一题</button>
+          </div>
+        </div>
+
+        <div class="card hidden" id="cm-wait">
+          <h2>交卷了</h2>
+          <div class="muted" id="cm-wait-text">YUI 正在作答…双方都交卷后自动揭晓。</div>
+        </div>
+
+        <div class="card hidden" id="cm-reveal">
+          <h2>同时揭晓 <span class="muted" id="cm-source" style="font-size:var(--fs-xs)"></span></h2>
+          <div class="hero">
+            <div class="hero-art"><span id="cm-hero-emoji">🐾</span></div>
+            <div class="nm" id="cm-score">—</div>
+            <div class="sum" id="cm-summary"></div>
+          </div>
+          <div class="stats" id="cm-stats"></div>
+          <div class="hr"></div>
+          <div id="cm-rows"></div>
+          <div class="row" style="margin-top:12px">
+            <button id="cm-again">再来一轮</button>
+            <button class="ghost" id="cm-back">回介绍页</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 关于与设置 -->
       <div id="view-about" class="hidden">
         <div class="card">
@@ -704,7 +776,7 @@ const CRISIS = [
   '情况紧急请立刻拨打 120 / 110。',
 ];
 let API_BASE = localStorage.getItem('assess_base');
-let VIEWS = ['home', 'quiz', 'result', 'records', 'tarot', 'play', 'about'];
+let VIEWS = ['home', 'quiz', 'result', 'records', 'tarot', 'play', 'compat', 'about'];
 // 解压小游戏（后面定义的 mikutap / fruitGame 会把自己挂上来；go() 要在它们之前用）
 let RELAX = null;
 
@@ -3197,6 +3269,162 @@ RELAX = {
     try { mikutap.stop(); fruitGame.pause(); } catch (err) { /* 停不掉也不影响切页 */ }
   },
 };
+
+// ── 默契测试（你和 YUI 的默契度）──────────────────────────────
+let CM_ROUND = null;       // {id, questions, answers:[{own,guess}|null]}
+let CM_POS = 0;
+let cmTimer = null;
+
+function cmStage(name){
+  ['intro', 'answer', 'wait', 'reveal'].forEach((n) => {
+    $('cm-' + n).classList.toggle('hidden', n !== name);
+  });
+}
+
+function cmLoadHistory(){
+  api('/api/compat', {action: 'info'}).then((res) => {
+    if (!res || res.ok === false) return;
+    const hist = res.history || [];
+    $('cm-history').innerHTML = hist.length ? hist.map((h) => {
+      const d = new Date((h.ts || 0) * 1000);
+      const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const arch = h.yui_source === 'archive' ? ' · 离线档案' : '';
+      return `<div class="link"><b>${h.score} 分</b>
+        <span>一致 ${h.same} · 你猜中 ${h.self_hit} · 她猜中 ${h.yui_hit}（${h.total} 题）　${when}${arch}</span></div>`;
+    }).join('') : '<div class="muted">还没有玩过，来一轮？</div>';
+  }).catch(() => {});
+}
+
+async function cmStart(){
+  if (cmTimer){ clearInterval(cmTimer); cmTimer = null; }
+  const st = $('st-compat');
+  st.textContent = '出题中…';
+  st.style.color = 'var(--ink2)';
+  try {
+    const res = await api('/api/compat', {action: 'start'});
+    if (!res.ok){ st.textContent = res.error || '开局失败'; st.style.color = 'var(--bad)'; return; }
+    CM_ROUND = {
+      id: res.round.id,
+      questions: res.round.questions,
+      answers: res.round.questions.map(() => null),
+    };
+    CM_POS = 0;
+    st.textContent = '';
+    cmRenderQ();
+    cmStage('answer');
+  } catch (err){ st.textContent = String(err); st.style.color = 'var(--bad)'; }
+}
+
+function cmRenderQ(){
+  const q = CM_ROUND.questions[CM_POS];
+  const total = CM_ROUND.questions.length;
+  $('cm-pos').textContent = String(CM_POS + 1);
+  $('cm-total').textContent = String(total);
+  $('cm-bar').style.width = `${(CM_POS / total) * 100}%`;
+  $('cm-cat').textContent = q.cat_name;
+  $('cm-qtext').textContent = q.text;
+  const ans = CM_ROUND.answers[CM_POS] || {};
+  const group = (kind, el) => {
+    el.innerHTML = q.options.map((o, i) =>
+      `<button class="opt${ans[kind] === i ? ' on' : ''}" data-i="${i}"><span class="k">${i + 1}</span>${esc(o)}</button>`
+    ).join('');
+    el.querySelectorAll('.opt').forEach((btn) => {
+      btn.onclick = () => {
+        if (!CM_ROUND.answers[CM_POS]) CM_ROUND.answers[CM_POS] = {own: null, guess: null};
+        CM_ROUND.answers[CM_POS][kind] = Number(btn.dataset.i);
+        el.querySelectorAll('.opt').forEach((b) => b.classList.toggle('on', b === btn));
+      };
+    });
+  };
+  group('own', $('cm-opts-own'));
+  group('guess', $('cm-opts-guess'));
+  $('cm-prev').disabled = CM_POS === 0;
+  $('cm-next').textContent = CM_POS === total - 1 ? '交卷揭晓' : '下一题';
+}
+
+$('cm-start').onclick = cmStart;
+$('cm-again').onclick = cmStart;
+$('cm-back').onclick = () => { cmStage('intro'); cmLoadHistory(); };
+$('cm-quit').onclick = () => {
+  if (!confirm('放弃这一轮？已答的不会保留。')) return;
+  CM_ROUND = null;
+  if (cmTimer){ clearInterval(cmTimer); cmTimer = null; }
+  cmStage('intro');
+  cmLoadHistory();
+};
+$('cm-prev').onclick = () => { if (CM_POS > 0){ CM_POS -= 1; cmRenderQ(); } };
+$('cm-next').onclick = () => {
+  const ans = CM_ROUND.answers[CM_POS];
+  if (!ans || ans.own == null || ans.guess == null){
+    floatText('这题两问都要选', {x: window.innerWidth / 2, y: 120});
+    return;
+  }
+  if (CM_POS < CM_ROUND.questions.length - 1){ CM_POS += 1; cmRenderQ(); return; }
+  cmSubmit();
+};
+
+async function cmSubmit(){
+  cmStage('wait');
+  $('cm-wait-text').textContent = '交卷中…';
+  try {
+    const res = await api('/api/compat', {action: 'submit', round_id: CM_ROUND.id, answers: CM_ROUND.answers});
+    if (!res.ok){ $('cm-wait-text').textContent = res.error || '提交失败'; return; }
+    $('cm-wait-text').textContent = 'YUI 正在作答…双方都交卷后自动揭晓。';
+    cmTimer = setInterval(cmPollReveal, 1500);
+    cmPollReveal();
+  } catch (err){ $('cm-wait-text').textContent = String(err); }
+}
+
+async function cmPollReveal(){
+  try {
+    const res = await api('/api/compat', {action: 'reveal', round_id: CM_ROUND.id});
+    if (!res.ok){
+      clearInterval(cmTimer); cmTimer = null;
+      $('cm-wait-text').textContent = res.error || '揭晓失败';
+      return;
+    }
+    if (res.status === 'waiting') return;      // 她还没交卷，下轮再问
+    clearInterval(cmTimer); cmTimer = null;
+    cmRenderReveal(res);
+  } catch (err){ /* 下轮再试 */ }
+}
+
+function cmRenderReveal(res){
+  const r = res.result || {};
+  $('cm-score').textContent = `默契分 ${r.score}`;
+  $('cm-summary').textContent =
+    `${r.total} 题里：选择一致 ${r.same} 题，你猜中她 ${r.self_hit} 题，她猜中你 ${r.yui_hit} 题。`;
+  $('cm-source').textContent = res.yui_source === 'archive'
+    ? 'YUI 离线档案作答（模型不在线，不是现场想的）'
+    : 'YUI 现场作答';
+  $('cm-stats').innerHTML = `
+    <div class="stat"><b>${r.same}</b><span>心意相通</span></div>
+    <div class="stat"><b>${r.self_hit}</b><span>你懂她</span></div>
+    <div class="stat"><b>${r.yui_hit}</b><span>她懂你</span></div>
+    <div class="stat"><b>${r.score}</b><span>默契分</span></div>`;
+  $('cm-rows').innerHTML = (r.rows || []).map((row, i) => {
+    const opt = (idx) => esc(row.options[idx] || '—');
+    const sameOwn = row.self_own === row.yui_own;
+    return `<div class="framebox">
+      <div class="fb-top">
+        <div class="fb-name">${i + 1}. ${esc(row.text)}</div>
+        <div class="fb-val">${esc(row.cat_name)}</div>
+      </div>
+      <div class="cm-pair">
+        <div>你选：<b class="${sameOwn ? 'hit' : ''}">${opt(row.self_own)}</b></div>
+        <div>她选：<b class="${sameOwn ? 'hit' : ''}">${opt(row.yui_own)}</b></div>
+        <div>你猜她：<b>${opt(row.self_guess)}</b></div>
+        <div>她猜你：<b>${opt(row.yui_guess)}</b></div>
+      </div>
+      <div class="fb-tip">${row.tags.map((t) => `<span class="cm-tag">${esc(t)}</span>`).join('')}</div>
+    </div>`;
+  }).join('');
+  cmStage('reveal');
+}
+
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => { if (tab.dataset.tab === 'compat') cmLoadHistory(); });
+});
 
 // ── 启动 ─────────────────────────────────────────────────────
 (async () => {

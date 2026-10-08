@@ -54,7 +54,7 @@ try:
         neko_plugin,
     )
 
-    from . import _games, _tarot
+    from . import _compat, _games, _tarot
     from ._engine import score
     from ._panel import PanelServer, find_open_port, guess_mime
     from ._scales import CATEGORIES, CRISIS_LINES, get_scale, list_scales
@@ -97,6 +97,9 @@ class AssessmentPlugin(NekoPluginBase):
             self._tarot_job: dict[str, Any] = {"status": "idle", "draw_id": "", "text": ""}
             # 解压小游戏：切水果记录 + 电子板本地音源（与测评记录完全分开）
             self._games: Optional[_games.GameStore] = None
+            # 默契测试：回合状态机 + YUI 后台作答任务
+            self._compat: Optional[_compat.CompatStore] = None
+            self._compat_job: dict[str, Any] = {"status": "idle", "round_id": "", "source": ""}
         except Exception:
             _dump_crash("init")
             raise
@@ -137,6 +140,7 @@ class AssessmentPlugin(NekoPluginBase):
         try:
             self._store = RecordStore(self._records_path(), logger=self.logger)
             self._games = _games.GameStore(self._data_dir() / "games.json", logger=self.logger)
+            self._compat = _compat.CompatStore(self._data_dir() / "compat.json", logger=self.logger)
             self._prefs = load_prefs(self._prefs_path())
             self._start_panel()
             count = len(list_scales())
@@ -183,6 +187,8 @@ class AssessmentPlugin(NekoPluginBase):
             ("POST", "/api/tarot/interpret"): self._api_tarot_interpret,
             ("GET", "/api/game"): self._api_game,
             ("POST", "/api/game"): self._api_game,
+            ("GET", "/api/compat"): self._api_compat,
+            ("POST", "/api/compat"): self._api_compat,
         }
         port = find_open_port(self._panel_port)
         server = PanelServer(
@@ -610,6 +616,121 @@ class AssessmentPlugin(NekoPluginBase):
         self.logger.info("[assessment] 本地音源导入：成功 {}，跳过 {}", saved, skipped)
         return saved, skipped
 
+    # ── 默契测试（你和 YUI 的默契度；机制复刻、题库自写）────────
+    _COMPAT_SYSTEM = (
+        "你是猫娘 YUI，正在和主人玩默契测试。规则："
+        "1. 每道题先选你自己真实想选的选项序号（own），再猜主人会选哪个序号（guess）；"
+        "2. 序号从 0 开始数；"
+        "3. 按你对主人的了解认真猜，不许敷衍；"
+        "4. 只输出 JSON，形如 {\"own\": [序号...], \"guess\": [序号...]}，不要任何其他文字。"
+    )
+
+    def _api_compat(self, body: dict) -> dict:
+        """默契测试：开回合 / 交卷 / 揭晓 / 历史。双方交卷前绝不返回 YUI 的答案。"""
+        if self._compat is None:
+            return {"ok": False, "error": "默契存储未就绪。"}
+        payload = body if isinstance(body, dict) else {}
+        action = str(payload.get("action") or "info").strip() or "info"
+
+        if action == "start":
+            qids = _compat.sample_questions()
+            round_id = uuid.uuid4().hex[:10]
+            entry = self._compat.start_round(round_id, qids)
+            self._compat_job = {"status": "running", "round_id": round_id, "source": ""}
+            threading.Thread(
+                target=self._compat_worker, args=(round_id,), daemon=True, name="neko-assess-compat"
+            ).start()
+            return {
+                "ok": True,
+                "round": {
+                    "id": entry["id"],
+                    "questions": [_compat.question_public(q) for q in qids],
+                },
+                "job": self._compat_job,
+            }
+
+        if action == "submit":
+            round_id = str(payload.get("round_id") or "").strip()
+            entry = self._compat.get(round_id)
+            if entry is None:
+                return {"ok": False, "error": "没有找到这一轮，可能已经换新一轮了。"}
+            answers = _compat.validate_answers(entry["question_ids"], payload.get("answers"))
+            if answers is None:
+                return {"ok": False, "error": "答案格式不对：每题都要选自己的、再猜 YUI 的。"}
+            entry = self._compat.set_self(round_id, answers)
+            if entry is None:
+                return {"ok": False, "error": "这一轮已经结束了，重新开一轮吧。"}
+            return {"ok": True, "status": entry["status"], "job": self._compat_job}
+
+        if action == "reveal":
+            round_id = str(payload.get("round_id") or "").strip()
+            entry = self._compat.reveal(round_id)
+            if entry is None:
+                return {"ok": False, "error": "没有找到这一轮。"}
+            if entry.get("status") != "revealed":
+                # 双方没交齐：只说在等，不给任何答案
+                return {"ok": True, "status": "waiting", "job": self._compat_job}
+            return {
+                "ok": True,
+                "status": "revealed",
+                "round_id": round_id,
+                "yui_source": entry.get("yui_source") or "archive",
+                "result": entry["result"],
+                "job": self._compat_job,
+            }
+
+        return {"ok": True, "history": self._compat.history(), "job": self._compat_job}
+
+    def _compat_worker(self, round_id: str) -> None:
+        """后台线程：YUI 现场作答（私有事件循环，绝不碰宿主循环），失败退离线档案。"""
+        try:
+            entry = self._compat.get(round_id)
+            if not entry:
+                return
+            qids = entry["question_ids"]
+            source = "llm"
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    answers = loop.run_until_complete(self._compat_llm(qids))
+                finally:
+                    loop.close()
+            except Exception as exc:
+                self.logger.warning("[assessment] YUI 默契作答失败，用离线档案：{}", exc)
+                answers = _compat.archive_answers(qids)
+                source = "archive"
+            self._compat_job = {"status": "done", "round_id": round_id, "source": source}
+            self._compat.set_yui(round_id, answers, source)
+        except Exception as exc:
+            self.logger.warning("[assessment] 默契作答线程异常：{}", traceback.format_exc())
+            self._compat_job = {"status": "error", "round_id": round_id, "source": f"{exc}"}
+
+    async def _compat_llm(self, question_ids: list[str]) -> dict:
+        lines = []
+        for i, qid in enumerate(question_ids, 1):
+            pub = _compat.question_public(qid) or {}
+            opts = "；".join(f"{j}.{o}" for j, o in enumerate(pub.get("options") or []))
+            lines.append(f"{i}. {pub.get('text', '')} 选项：{opts}")
+        text = await self._llm_chat(self._COMPAT_SYSTEM, "\n".join(lines), max_tokens=400)
+        return self._parse_compat_answers(text, len(question_ids))
+
+    def _parse_compat_answers(self, text: str, want: int) -> dict:
+        """从模型输出里抠出 own/guess 两个序号数组并校验；不合格直接抛异常走档案兜底。"""
+        import json
+        import re
+
+        match = re.search(r"\{.*\}", str(text or ""), re.S)
+        if not match:
+            raise RuntimeError("模型没有返回 JSON")
+        data = json.loads(match.group(0))
+        own = [int(x) for x in (data.get("own") or [])]
+        guess = [int(x) for x in (data.get("guess") or [])]
+        if len(own) != want or len(guess) != want:
+            raise RuntimeError(f"模型答案数量不对：own={len(own)}, guess={len(guess)}, 要 {want}")
+        if any(x < 0 or x > 3 for x in own + guess):
+            raise RuntimeError("模型给了越界序号")
+        return {"own": own, "guess": guess}
+
     # ── 猫娘塔罗 ───────────────────────────────────────────────
     _TAROT_SYSTEM = (
         "你是猫娘塔罗解读师，用猫娘口吻解读塔罗牌。规则："
@@ -758,7 +879,8 @@ class AssessmentPlugin(NekoPluginBase):
             self.logger.warning("[assessment] 塔罗解读线程异常：{}", traceback.format_exc())
             self._tarot_job = {"status": "error", "draw_id": draw_id, "text": f"解读出了点问题：{exc}"}
 
-    async def _tarot_llm(self, drawn: dict) -> str:
+    async def _llm_chat(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
+        """塔罗与默契共用的模型调用：llm_client 优先，失败直连 /chat/completions。"""
         cfg: dict[str, Any] = {}
         try:
             from utils.config_manager import get_config_manager
@@ -772,7 +894,6 @@ class AssessmentPlugin(NekoPluginBase):
         api_key = str(cfg.get("api_key") or "").strip()
         if not (model and base_url and api_key):
             raise RuntimeError("尚未配置会话模型")
-        user = "\n".join(_tarot.card_lines(drawn))
 
         # 优先官方 llm_client；TypeError 兼容无 provider_type 参数的旧签名
         try:
@@ -780,7 +901,7 @@ class AssessmentPlugin(NekoPluginBase):
 
             kwargs: dict[str, Any] = {
                 "model": model, "base_url": base_url, "api_key": api_key,
-                "max_completion_tokens": 1024, "timeout": 60.0,
+                "max_completion_tokens": max_tokens, "timeout": 60.0,
             }
             try:
                 llm = create_chat_llm_async(**kwargs)
@@ -791,7 +912,7 @@ class AssessmentPlugin(NekoPluginBase):
                 llm = create_chat_llm_async(**kwargs)
             result = await asyncio.wait_for(
                 llm.ainvoke([
-                    {"role": "system", "content": self._TAROT_SYSTEM},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ]),
                 timeout=60.0,
@@ -804,9 +925,10 @@ class AssessmentPlugin(NekoPluginBase):
             pass
         except Exception as exc:
             self.logger.warning("[assessment] llm_client 调用失败，降级直连：{}", exc)
-        return await asyncio.to_thread(self._tarot_llm_http, base_url, api_key, model, user)
+        return await asyncio.to_thread(self._llm_chat_http, base_url, api_key, model, system, user, max_tokens)
 
-    def _tarot_llm_http(self, base_url: str, api_key: str, model: str, user: str) -> str:
+    def _llm_chat_http(self, base_url: str, api_key: str, model: str,
+                       system: str, user: str, max_tokens: int) -> str:
         import json
         import urllib.error
         import urllib.request
@@ -816,10 +938,10 @@ class AssessmentPlugin(NekoPluginBase):
             {
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": self._TAROT_SYSTEM},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                "max_completion_tokens": 1024,
+                "max_completion_tokens": max_tokens,
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -843,6 +965,9 @@ class AssessmentPlugin(NekoPluginBase):
         if not choices:
             raise RuntimeError("模型没有返回内容")
         return str((choices[0].get("message") or {}).get("content") or "").strip()
+
+    async def _tarot_llm(self, drawn: dict) -> str:
+        return await self._llm_chat(self._TAROT_SYSTEM, "\n".join(_tarot.card_lines(drawn)))
 
     # ── 聊天入口（轻量，方便在对话框里唤起）────────────────────
     @message(id="assessment_chat", source="chat")

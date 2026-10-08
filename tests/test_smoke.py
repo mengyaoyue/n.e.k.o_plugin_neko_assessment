@@ -896,3 +896,148 @@ def test_game_audio_assets_present():
                if not (pad / n["file"]).is_file()]
     assert not missing, f"缺采样文件：{missing}"
     assert (pad / "CREDITS.md").is_file()
+
+
+# ── 默契测试（你和 YUI 的默契度；机制复刻、题库自写）──────────
+def test_compat_bank_well_formed():
+    compat = _load("_compat")
+    assert len(compat.QUESTIONS) == 60
+    ids = [q["id"] for q in compat.QUESTIONS]
+    assert len(set(ids)) == 60, "题目 id 不能重复"
+    cats = {q["cat"] for q in compat.QUESTIONS}
+    assert cats == set(compat.CATEGORIES), "类别覆盖不齐"
+    for q in compat.QUESTIONS:
+        assert len(q["options"]) == 4, f"{q['id']} 必须 4 个选项"
+        assert len(q["text"]) >= 10 and q["text"].endswith("？"), f"{q['id']} 不是完整问句"
+        assert 0 <= q["own"] < 4 and 0 <= q["guess"] < 4, f"{q['id']} 档案序号越界"
+        # 公开题面绝不携带档案答案（偷看不了）
+        pub = compat.question_public(q["id"])
+        assert "own" not in pub and "guess" not in pub
+
+
+def test_compat_sample_and_validate():
+    import random
+    compat = _load("_compat")
+    qids = compat.sample_questions(rng=random.Random(42))
+    assert len(qids) == compat.ROUND_SIZE and len(set(qids)) == len(qids)
+    # 合法提交通过
+    answers = [{"own": 1, "guess": 2} for _ in qids]
+    assert compat.validate_answers(qids, answers) == {"own": [1] * 10, "guess": [2] * 10}
+    # 长度不齐 / 越界 / 非数字 一律拒收
+    assert compat.validate_answers(qids, answers[:9]) is None
+    bad = [dict(a) for a in answers]
+    bad[3]["own"] = 4
+    assert compat.validate_answers(qids, bad) is None
+    bad = [dict(a) for a in answers]
+    bad[0]["guess"] = "x"
+    assert compat.validate_answers(qids, bad) is None
+
+
+def test_compat_classify_scoring():
+    compat = _load("_compat")
+    qids = [q["id"] for q in compat.QUESTIONS[:10]]
+    self_a = {"own": [0] * 10, "guess": [1] * 10}
+    yui_a = {"own": [0] * 10, "guess": [0] * 10}
+    r = compat.classify_round(qids, self_a, yui_a)
+    # 自选全同（10）+ 她猜你全中（10）+ 你猜她全空（0）= 20/30 → 67 分
+    assert r["same"] == 10 and r["yui_hit"] == 10 and r["self_hit"] == 0
+    assert r["score"] == 67
+    assert all("心意相通" in row["tags"] for row in r["rows"])
+    # 完全错开：0 分
+    r = compat.classify_round(qids, {"own": [0]*10, "guess": [0]*10}, {"own": [1]*10, "guess": [1]*10})
+    assert r["score"] == 0 and all(row["tags"] == ["擦肩而过"] for row in r["rows"])
+
+
+def test_compat_store_state_machine(tmp_path):
+    compat = _load("_compat")
+    store = compat.CompatStore(tmp_path / "compat.json")
+    qids = [q["id"] for q in compat.QUESTIONS[:10]]
+    store.start_round("r1", qids)
+    # 没交卷：reveal 只给状态，不泄露任何答案
+    waiting = store.reveal("r1")
+    assert waiting["status"] == "answering" and waiting.get("result") is None
+    store.set_self("r1", {"own": [0]*10, "guess": [1]*10})
+    assert store.reveal("r1")["status"] == "answering"      # YUI 还没交
+    store.set_yui("r1", {"own": [0]*10, "guess": [0]*10}, "llm")
+    entry = store.reveal("r1")
+    assert entry["status"] == "revealed" and entry["yui_source"] == "llm"
+    assert entry["result"]["same"] == 10
+    # 已揭晓的回合不能再改
+    assert store.set_self("r1", {"own": [1]*10, "guess": [1]*10}) is None
+    # 开新回合：旧未完成回合作废
+    store.start_round("r2", qids)
+    store.set_self("r2", {"own": [0]*10, "guess": [0]*10})
+    store.start_round("r3", qids)
+    assert store.get("r2")["status"] == "abandoned"
+    hist = store.history()
+    assert len(hist) == 1 and hist[0]["id"] == "r1"
+
+
+def test_api_compat_actions(tmp_path):
+    cls = _plugin_cls()
+
+    class Fake:
+        data_dir = tmp_path
+        _compat = _load("_compat").CompatStore(tmp_path / "compat.json")
+        _compat_job = {"status": "idle", "round_id": "", "source": ""}
+
+        def _compat_worker(self, round_id):   # 测试里不真跑 LLM：直接喂档案答案
+            entry = self._compat.get(round_id)
+            mod = _load("_compat")
+            self._compat.set_yui(round_id, mod.archive_answers(entry["question_ids"]), "archive")
+
+    fake = Fake()
+    res = cls._api_compat(fake, {"action": "start"})
+    assert res["ok"] and len(res["round"]["questions"]) == 10
+    rid = res["round"]["id"]
+    # start 在后台线程里喂 YUI 答案：等它落库（不设等待会有竞态，测试会偶发挂）
+    import time as _t
+
+    deadline = _t.time() + 5
+    while _t.time() < deadline:
+        if fake._compat.get(rid).get("yui"):
+            break
+        _t.sleep(0.02)
+    assert fake._compat.get(rid).get("yui"), "假 worker 没在时限内交卷"
+    # 没交卷就揭晓 → waiting，且响应里不含任何答案
+    res = cls._api_compat(fake, {"action": "reveal", "round_id": rid})
+    assert res["ok"] and res["status"] == "waiting" and "result" not in res
+    # 交卷（此时 YUI 已由假 worker 填了档案答案）→ 立即可揭晓
+    answers = [{"own": i % 4, "guess": (i + 1) % 4} for i in range(10)]
+    res = cls._api_compat(fake, {"action": "submit", "round_id": rid, "answers": answers})
+    assert res["ok"] and res["status"] == "ready"
+    res = cls._api_compat(fake, {"action": "reveal", "round_id": rid})
+    assert res["ok"] and res["status"] == "revealed"
+    assert res["yui_source"] == "archive" and res["result"]["total"] == 10
+    assert len(res["result"]["rows"]) == 10
+    # 格式错误拒收
+    res = cls._api_compat(fake, {"action": "submit", "round_id": rid, "answers": answers[:5]})
+    assert res["ok"] is False
+    # 不存在的回合
+    assert cls._api_compat(fake, {"action": "reveal", "round_id": "nope"})["ok"] is False
+
+
+def test_compat_answer_parsing():
+    cls = _plugin_cls()
+    fake = type("F", (), {})()
+    good = '{"own": [0,1,2,3,0,1,2,3,0,1], "guess": [3,2,1,0,3,2,1,0,3,2]}'
+    parsed = cls._parse_compat_answers(fake, "先说两句废话" + chr(10) + good + chr(10) + "后话", 10)
+    assert parsed["own"][1] == 1 and parsed["guess"][0] == 3
+    for bad in ("没有 JSON", '{"own": [0,1], "guess": [0,1]}',
+                '{"own": [0]*10, "guess": [0]*10}', '{"own": [4]*10, "guess": [0]*10}'):
+        try:
+            cls._parse_compat_answers(fake, bad, 10)
+            raise AssertionError(f"应该拒绝：{bad[:24]}")
+        except (RuntimeError, ValueError, KeyError):
+            pass
+
+
+def test_panel_compat_tab_present():
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'data-tab="compat"' in html and 'id="view-compat"' in html
+    for probe in ('id="cm-start"', 'id="cm-opts-own"', 'id="cm-opts-guess"',
+                  'id="cm-reveal"', 'id="cm-history"'):
+        assert probe in html, probe
+    script = html.split("<script>", 1)[1]
+    for probe in ("cmPollReveal", "你猜 YUI 会选", "action: 'reveal'", "离线档案"):
+        assert probe in script or probe in html, probe
