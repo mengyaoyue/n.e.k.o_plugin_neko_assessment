@@ -241,3 +241,10 @@ SOURCE = {
     "riasec": "O*NET Interest Profiler Short Form（美国劳工部）· onetcenter.org · 美国政府作品（公共领域）· 六区各 10 题共 60 题，中文自译",
     "type16": "OEJTS（Open Extended Jungian Type Scales 1.2，Eric Jorgenson）· CC BY-NC-SA 4.0 · 非商业使用；与 MBTI 无关联 · 自译",
 }
+
+# 量表显示名（题库已换成真实工具原题后，名称要与之一致，不能再用「20 题 / 原创」的旧说法）
+NAME = {
+    "big5": "大五人格（IPIP）",
+    "riasec": "职业兴趣（霍兰德）",
+    "type16": "16 型人格（OEJTS）",
+}

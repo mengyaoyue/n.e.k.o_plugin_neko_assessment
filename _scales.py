@@ -1,12 +1,15 @@
 """测评题库。
 
-版权说明（重要）：
-- **Mini-IPIP 大五人格**：条目来自 International Personality Item Pool（ipip.ori.org），
-  **公共领域，可自由使用（含商用）**。出处 Donnellan, Oswald, Baird & Lucas (2006)。
+来源与许可（重要）：
+- **大五人格**：IPIP Big-Five Factor Markers（Goldberg），**公共领域，可自由使用（含商用）**，
+  每因子 20 题共 100 题，照搬官方键值（含 37 条反向题）。见 _bank_real.py。
+- **16 型人格**：OEJTS 1.2（Open Extended Jungian Type Scales，Eric Jorgenson），
+  **CC BY-NC-SA 4.0，非商业使用**；与 MBTI 无任何关联。
+- **职业兴趣**：O*NET Interest Profiler Short Form（美国劳工部），**美国政府作品（公共领域）**。
 - **PHQ-9 / GAD-7**：由 Pfizer 资助开发、现公开提供，**复制/翻译/展示无需授权**。
-- **UCLA 孤独感 3 题简版**：学术研究用途公开可复现。
-- **其余量表条目为本插件原创**（16 型、霍兰德、依恋、心理韧性、趣味题），
-  明确不是官方 MBTI / 官方霍兰德测验，仅作自我探索与娱乐。
+- **UCLA 孤独感 3 题简版**：Hughes 等 (2004)，学术研究用途公开可复现。
+- **其余量表**：没有对应的公共领域量表，条目由本插件**参照同类真实量表句式自编**
+  （第一人称完整行为陈述），明确不是官方测验，仅作自我探索与娱乐。
 
 所有量表**只作自我了解与反思，不构成医学诊断**。
 """
@@ -20,6 +23,7 @@ from ._bank_human import OFFICIAL as OFFICIAL_SCALES
 from ._bank_origin2 import BANKS as _FUN_BANKS
 from ._bank_origin2 import FIXUPS as _ORIGIN_FIXUPS
 from ._bank_real import BANKS as _REAL_BANKS
+from ._bank_real import NAME as _REAL_NAME
 from ._bank_real import SOURCE as _REAL_SOURCE
 
 # ── 通用选项组 ────────────────────────────────────────────────
@@ -61,7 +65,7 @@ def _likert(pairs, dim):
     ]
 
 
-# ── 1. 大五人格 Mini-IPIP（公共领域）──────────────────────────
+# ── 1. 大五人格（IPIP，公共领域；运行时由 _bank_real 换成 100 题原题）──
 BIG5_ITEMS = []
 BIG5_ITEMS += _likert([
     ("我是聚会上的活跃分子。", False),
@@ -106,7 +110,7 @@ def _choices(pairs):
     return rows
 
 
-# ── 2. 16 型人格（原创四项二分，非官方 MBTI）───────────────────
+# ── 2. 16 型人格（运行时由 _bank_real 换成 OEJTS 1.2，非官方 MBTI）────
 TYPE16_ITEMS = _choices([
     ("周末突然空出来，你第一反应是？", [
         ("叫上人一起出去玩", {"E": 2}),
@@ -183,7 +187,7 @@ def _type16_result(code):
     return {"code": code, "name": name, "summary": summary, "strengths": good, "blind_spot": blind}
 
 
-# ── 3. 霍兰德职业兴趣（原创短版）──────────────────────────────
+# ── 3. 霍兰德职业兴趣（运行时由 _bank_real 换成 O*NET 原题）────────
 RIASEC_DIMS = [
     {"key": "R", "name": "现实型", "desc": "动手、实操、和具体的东西打交道"},
     {"key": "I", "name": "研究型", "desc": "追问原理、喜欢把问题想透"},
@@ -410,11 +414,11 @@ SPIRIT_PROFILES = {
 SCALES = [
     {
         "id": "big5",
-        "name": "大五人格（20 题）",
+        "name": "大五人格（IPIP）",
         "category": "人格",
         "minutes": 3,
         "kind": "dimension",
-        "source": "Mini-IPIP（Donnellan 等，2006）｜IPIP 条目为公共领域",
+        "source": "IPIP Big-Five Factor Markers（Goldberg）｜公共领域，每因子 20 题共 100 题",
         "intro": "心理学界最主流的模型。不给贴标签，只告诉你在五个维度上的位置。",
         "options": LIKERT_ACCURACY,
         "dimensions": [
@@ -440,11 +444,11 @@ SCALES = [
     },
     {
         "id": "type16",
-        "name": "16 型人格（原创）",
+        "name": "16 型人格（OEJTS）",
         "category": "人格",
         "minutes": 2,
         "kind": "type",
-        "source": "本插件原创条目，非官方 MBTI，仅作自我探索",
+        "source": "OEJTS 1.2（Eric Jorgenson）｜CC BY-NC-SA 4.0｜非官方 MBTI",
         "intro": "四项二分拼出一个类型，像给性格拍一张快相。",
         "options": None,
         "dichotomies": [
@@ -461,7 +465,7 @@ SCALES = [
         "category": "职业",
         "minutes": 3,
         "kind": "dimension_type",
-        "source": "本插件原创短版，非官方霍兰德测验",
+        "source": "O*NET Interest Profiler（美国劳工部）｜公共领域",
         "intro": "看你在六类活动上的倾向，给出三字母兴趣码。",
         "options": None,
         "dimensions": RIASEC_DIMS,
@@ -533,7 +537,7 @@ SCALES = [
     },
     {
         "id": "loneliness3",
-        "name": "孤独感（3 题简版）",
+        "name": "孤独感自查（UCLA）",
         "category": "情绪健康",
         "minutes": 1,
         "kind": "clinical",
@@ -1188,11 +1192,11 @@ SCALES.extend([
     },
     {
         "id": "ennea",
-        "name": "九型人格（原创短筛）",
+        "name": "九型人格（自编）",
         "category": "人格",
         "minutes": 3,
         "kind": "type",
-        "source": "本插件原创短筛，非官方九型测验",
+        "source": "本插件自编，非官方九型测验",
         "intro": "九种核心动机，看哪个最像你。",
         "options": None,
         "items": ENNEA_ITEMS,
@@ -1452,7 +1456,7 @@ _METHOD_DIM = (
 )
 _METHOD_TYPE = (
     "每一题都会给某个类型加权重，最后取总权重最高的那一个作为结果；"
-    "结果页会列出所有类型的占比，差得不多就是「两类都像」。此类量表为原创自编，"
+    "结果页会列出所有类型的占比，差得不多就是「两类都像」。"
     "用于自我探索，不是临床或职业测评工具。"
 )
 _METHOD_CLIN = (
@@ -1462,8 +1466,6 @@ _METHOD_CLIN = (
 
 # 官方量表：题量与计分不可改（扩题会破坏可比性与效度，这是底线）
 FIXED_SCALES = {"phq9", "gad7", "loneliness3"}
-# 原创的趣味/类型量表：题库规模与默认题量
-SMALL_DEFAULT = {"boba": 4, "love": 5, "ennea": 5}
 
 for _scale in SCALES:
     _scale.setdefault("bank", _scale["items"])
@@ -1474,8 +1476,6 @@ for _scale in SCALES:
     else:
         _scale.setdefault("min_items", min(6, len(_scale["items"])))
         _scale.setdefault("default_items", min(len(_scale["items"]), 20))
-    if _scale["id"] in SMALL_DEFAULT:
-        _scale["default_items"] = min(_scale["default_items"], SMALL_DEFAULT[_scale["id"]])
     _scale.setdefault(
         "method",
         _METHOD_CLIN if _scale["kind"] == "clinical"
@@ -1510,11 +1510,16 @@ for _scale in SCALES:
 # ════════════════════════════════════════════════════════════
 
 _METHOD_SHORT = {
-    "dimension": "5 点计分；反向题先翻转再相加，换算成该维度的百分比。题库 100 题，每次随机抽题。",
-    "type": "5 点计分；哪一类的平均分最高就是哪一类。题库 100 题，每次随机抽题。",
-    "dimension_type": "5 点计分；按得分排序给出倾向（字母量表给出兴趣码）。题库 100 题，随机抽题。",
+    "dimension": "5 点计分；反向题先翻转再相加，换算成该维度的百分比。题库 {n} 题，每次随机抽题。",
+    "type": "5 点计分；哪一类的平均分最高就是哪一类。题库 {n} 题，每次随机抽题。",
+    "dimension_type": "5 点计分；按得分排序给出倾向（字母量表给出兴趣码）。题库 {n} 题，随机抽题。",
     "clinical": "官方原题按原量表分级；题量超过官方题数时为「扩展自评」，不套用官方分级。",
 }
+# 自编临床倾向量表（不是官方工具）：不给官方分级，如实标注为自编
+_METHOD_SELF_CLIN = (
+    "5 点计分；分数越高代表该倾向越明显。此为自编筛查题，仅用于自我觉察与反思，"
+    "不作为诊断依据。题库 {n} 题，每次随机抽题。"
+)
 
 _ALL_BANKS = {**_BANKS3, **_FUN_BANKS}
 for _scale in SCALES:
@@ -1525,20 +1530,26 @@ for _scale in SCALES:
     _scale["options"] = AGREE_5                      # 统一 5 点同意度
     _scale["min_items"] = 10
     _scale["default_items"] = 20
-    _scale.setdefault("method", _METHOD_SHORT.get(_scale.get("kind"), _METHOD_SHORT["dimension"]))
-    _scale["method"] = _METHOD_SHORT.get(_scale.get("kind"), _METHOD_SHORT["dimension"])
     _scale["items"] = _bank[: _scale["default_items"]]
     if _scale["id"] in OFFICIAL_SCALES:
         _official = OFFICIAL_SCALES[_scale["id"]]
         _scale["official_count"] = _official["count"]
         _scale["official_texts"] = _official["texts"]
-        _scale["default_items"] = _official["count"]
-        _scale["items"] = _bank[: _official["count"]]
+        # 官方原版可能很短（UCLA 3 题 / GAD-7 7 题 / PHQ-9 9 题）。
+        # 默认至少 10 题走「扩展自评」，避免出现只有 3 题就算一次「测评」；
+        # 官方原题仍作为可选项保留（选到官方题数时才套官方分级）。
+        _scale["default_items"] = max(_official["count"], 10)
+        _scale["items"] = _bank[: _scale["default_items"]]
         _scale["fixed"] = False                      # 允许扩展自评，但两种模式区别对待
-        _scale["min_items"] = min(_scale["default_items"], 10)
+        _scale["min_items"] = 10
         # 官方量表必须用官方选项（0=完全没有 ~ 3=几乎每天），否则官方分级阈值全错
         _scale["options"] = FREQ_WEEK
         _scale["method"] = _METHOD_SHORT["clinical"]
+    else:
+        # 算分口径里的题库数必须与真实题库一致（不能写死 100）
+        _kind = _scale.get("kind")
+        _tpl = _METHOD_SELF_CLIN if _kind == "clinical" else _METHOD_SHORT.get(_kind, _METHOD_SHORT["dimension"])
+        _scale["method"] = _tpl.format(n=len(_bank))
 
 
 # ════════════════════════════════════════════════════════════
@@ -1560,6 +1571,7 @@ for _scale in SCALES:
     _scale["bank"] = _real
     _scale["items"] = _real[: len(_real)]          # 默认就是原量表的全部题目
     _scale["default_items"] = len(_real)
+    _scale["name"] = _REAL_NAME.get(_scale["id"], _scale["name"])
     _scale["source"] = _REAL_SOURCE.get(_scale["id"], _scale["source"])
     if _scale["id"] == "riasec":
         _scale["options"] = INTEREST_5             # 原量表是「你愿意做这件事吗」

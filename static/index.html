@@ -230,6 +230,42 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 @keyframes floatUp{0%{opacity:0;transform:translate(-50%,0) scale(.9)}20%{opacity:1;transform:translate(-50%,-12px)}
   100%{opacity:0;transform:translate(-50%,-66px)}}
 
+/* ── 猫娘塔罗 ─────────────────────────────────────────────── */
+#tspreads{display:flex;gap:8px;flex-wrap:wrap}
+#tspreads .tchip{flex:1;min-width:108px;text-align:center;padding:9px 8px;border-radius:14px;cursor:pointer;
+  background:rgba(255,255,255,.66);border:1px solid var(--edge);transition:.15s;user-select:none}
+#tspreads .tchip b{display:block;font-family:var(--font-ui);font-size:calc(var(--fs) * .96);color:#40375f}
+#tspreads .tchip small{color:var(--dim);font-size:calc(var(--fs) * .82)}
+#tspreads .tchip:hover{border-color:var(--accent-2)}
+#tspreads .tchip.on{background:linear-gradient(180deg,#7f74e6,#6d5ce0);border-color:transparent}
+#tspreads .tchip.on b{color:#fff}
+#tspreads .tchip.on small{color:rgba(255,255,255,.82)}
+#tq{width:100%;margin-top:11px}
+.tgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:15px;margin-top:14px}
+.tcard{aspect-ratio:7/12;perspective:900px;position:relative}
+.tcard .inner{position:absolute;inset:0;transform-style:preserve-3d;
+  transition:transform .62s cubic-bezier(.34,1.25,.5,1)}
+.tcard.flip .inner{transform:rotateY(180deg)}
+.tface,.tback{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;
+  border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+.tback{background:linear-gradient(160deg,#7f74e6,#4a3fa0 70%);display:grid;place-items:center}
+.tback::after{content:"✦";color:rgba(255,255,255,.9);font-size:calc(var(--fs) * 2.2);
+  text-shadow:0 0 18px rgba(255,255,255,.6)}
+.tface{transform:rotateY(180deg);background:#fdfcf8;border:1px solid var(--edge)}
+.tface img{width:100%;height:100%;object-fit:cover;display:block}
+.tface img.rev{transform:rotate(180deg)}
+.tmeta{margin-top:8px;text-align:center}
+.tmeta .pos{display:block;color:#6d5ce0;font-size:calc(var(--fs) * .82);font-weight:600}
+.tmeta b{display:block;font-family:var(--font-ui);font-size:calc(var(--fs) * .89);color:#40375f}
+.tmeta .keys{display:block;color:var(--dim);font-size:calc(var(--fs) * .82);margin-top:2px;line-height:1.5}
+.tbubble{margin-top:13px;background:rgba(255,255,255,.72);border:1px solid var(--line);
+  border-radius:16px;padding:13px 16px;font-size:calc(var(--fs) * .89);line-height:1.85;white-space:pre-wrap}
+.thist-item{display:flex;gap:9px;align-items:baseline;padding:8px 4px;border-bottom:1px solid var(--edge);
+  cursor:pointer;transition:.14s}
+.thist-item:hover{background:rgba(255,255,255,.6)}
+.thist-item .h-when{color:var(--dim);font-size:calc(var(--fs) * .82);flex:none}
+.thist-item .h-spread{font-weight:600;font-size:calc(var(--fs) * .86);color:#40375f;flex:none}
+
 @media (max-width:820px){
   .layout{grid-template-columns:1fr}
   .rail{position:static;flex-direction:row;overflow-x:auto;border-radius:18px}
@@ -265,6 +301,9 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
       </button>
       <button class="tab" data-tab="records">
         <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7M9 8h4"/></svg><span>记录</span>
+      </button>
+      <button class="tab" data-tab="tarot">
+        <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z"/><path d="M18.5 14.5l.9 2.3 2.3.9-2.3.9-.9 2.3-.9-2.3-2.3-.9 2.3-.9z"/><path d="M5.5 14.5l.9 2.3 2.3.9-2.3.9-.9 2.3-.9-2.3-2.3-.9 2.3-.9z"/></svg><span>塔罗</span>
       </button>
       <button class="tab" data-tab="about">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.8"/></svg><span>关于</span>
@@ -303,7 +342,7 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
           <h2>先说清楚</h2>
           <div class="notice">这些测评只用于<b>自我了解与反思</b>，<b>不是医学诊断</b>，也不能替代心理咨询或治疗。
             如果结果让你不舒服，或者你正在经历困难，请优先联系专业人士。</div>
-          <div class="muted">数据来源：科学量表使用公共领域或公开可复现的条目（见每份量表的"来源"），类型类与趣味量表为原创题目。</div>
+          <div class="muted">数据来源：人格 / 职业量表照搬公开工具原题（IPIP、OEJTS、O*NET），情绪健康用公开筛查工具（PHQ-9、GAD-7、UCLA 简版），其余量表为自编条目——每份量表的「来源」里都写明了。</div>
         </div>
       </div>
 
@@ -378,17 +417,46 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
         </div>
       </div>
 
+      <!-- 猫娘塔罗 -->
+      <div id="view-tarot" class="hidden">
+        <div class="card">
+          <h2>猫娘塔罗</h2>
+          <div id="tspreads"></div>
+          <input id="tq" type="text" maxlength="60" placeholder="想问什么？默念着写下来（也可以不写）">
+          <div class="row">
+            <button id="btn-tarot">🔮 开始占卜</button>
+            <span class="status" id="st-tarot"></span>
+          </div>
+        </div>
+        <div class="card hidden" id="tresult">
+          <h2>牌面<span class="status" id="tq-label" style="margin-left:6px"></span></h2>
+          <div class="tgrid" id="tdraw"></div>
+          <div class="row">
+            <button id="btn-interpret">🐾 猫娘解读</button>
+            <span class="status" id="st-interp"></span>
+          </div>
+          <div class="tbubble hidden" id="tinterpret"></div>
+        </div>
+        <div class="card">
+          <h2>占卜记录</h2>
+          <div id="thist"></div>
+        </div>
+      </div>
+
       <!-- 关于与设置 -->
       <div id="view-about" class="hidden">
         <div class="card">
           <h2>版权与来源</h2>
           <div class="kv">
-            <div class="line"><b>大五人格</b><span>Mini-IPIP（Donnellan 等，2006）条目来自 International Personality Item Pool（ipip.ori.org），公共领域。</span></div>
+            <div class="line"><b>大五人格</b><span>IPIP 大五因子标记（Goldberg）条目来自 International Personality Item Pool（ipip.ori.org），公共领域，每因子 20 题。</span></div>
+            <div class="line"><b>16 型人格</b><span>OEJTS 1.2（Open Extended Jungian Type Scales，Eric Jorgenson），CC BY-NC-SA 4.0，非商业使用；与 MBTI 无关联。</span></div>
+            <div class="line"><b>职业兴趣</b><span>O*NET Interest Profiler（美国劳工部）原题，属美国政府作品，公共领域。</span></div>
             <div class="line"><b>PHQ-9</b><span>Kroenke 等，公开提供，复制/翻译无需授权。</span></div>
             <div class="line"><b>GAD-7</b><span>Spitzer 等，公开提供，复制无需授权。</span></div>
             <div class="line"><b>UCLA 简版</b><span>Hughes 等（2004），研究用途公开可复现。</span></div>
+            <div class="line"><b>猫娘塔罗</b><span>78 张牌面为莱德-伟特（Rider-Waite-Smith）塔罗 1909 年版 Pamela Colman Smith 原版扫描（Wikimedia Commons，公有领域）；牌名与传统关键词属公共领域；猫娘解读由本机配置的大模型现场生成，只作娱乐与自我探索。</span></div>
             <div class="line"><b>关于分数</b><span>这些量表没有常模样本，分数只反映「这份量表内部」的相对强度，不是人群排名。</span></div>
-            <div class="line"><b>原创题目</b><span>16 型人格、职业兴趣、依恋类型、心理韧性、魔法分院、灵魂动物为本插件原创，非官方 MBTI / 霍兰德测验，仅作探索与娱乐。</span></div>
+            <div class="line"><b>自编题目</b><span>九型人格、社交能量、情绪智力、心理韧性、拖延症、成人依恋、爱的语言，以及魔法分院、灵魂动物等趣味量表为本插件自编，非官方测验，仅作探索与娱乐。</span></div>
           </div>
         </div>
         <div class="card">
@@ -406,9 +474,19 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
             <div><label class="muted">鼠标轨迹</label>
               <select id="ui-trail"><option value="auto">自动</option><option value="on">开</option><option value="off">关</option></select></div>
             <div><label class="muted">背景</label>
-              <select id="ui-bg"><option value="default">插件自带</option><option value="plain">纯色渐变</option></select></div>
+              <select id="ui-bg">
+                <option value="default">插件自带</option>
+                <option value="custom">我上传的图</option>
+                <option value="plain">纯色渐变（不要图）</option>
+              </select></div>
             <div><label class="muted">蒙层</label>
               <select id="ui-bg-dim"><option value="light">薄</option><option value="medium">中</option><option value="strong">厚</option></select></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="ghost" id="btn-bg-upload">换背景图</button>
+            <button class="ghost" id="btn-bg-reset">恢复默认</button>
+            <input type="file" id="bg-file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none">
+            <span class="muted" id="bg-note"></span>
           </div>
         </div>
         <div class="card">
@@ -445,10 +523,21 @@ const CRISIS = [
   '情况紧急请立刻拨打 120 / 110。',
 ];
 let API_BASE = localStorage.getItem('assess_base');
-let VIEWS = ['home', 'quiz', 'result', 'records', 'about'];
+let VIEWS = ['home', 'quiz', 'result', 'records', 'tarot', 'about'];
 
 async function findBase(){
-  if (API_BASE !== null && API_BASE !== undefined) return API_BASE;
+  // 缓存的端口要先验活：端口漂移后旧缓存会让面板永远"连不上"
+  if (API_BASE !== null && API_BASE !== undefined){
+    try{
+      const res = await fetch(`${API_BASE}/api/scales`);
+      if (res.ok){
+        const data = await res.json();
+        if (data && data.scales) return API_BASE;
+      }
+    }catch(err){ /* 缓存失效，重扫 */ }
+    API_BASE = null;
+    localStorage.removeItem('assess_base');
+  }
   for (const base of ['', ...PORTS.map((p) => `http://127.0.0.1:${p}`)]){
     try{
       const ctrl = new AbortController();
@@ -487,60 +576,102 @@ function go(view){
 }
 document.querySelectorAll('.tab').forEach((tab) => { tab.onclick = () => go(tab.dataset.tab); });
 
-// ── 鼠标轨迹 ──────────────────────────────────────────────────
+// ── 鼠标轨迹 + 点击反馈 ────────────────────────────────────────
+// 轨迹：pointermove + mousemove 双监听（内嵌 webview 里 pointermove 偶发不派发，
+// 只靠它会"有时候不显示"）；点击反馈：pointerdown 在点击点画一圈扩散涟漪。
 const trail = (() => {
   const canvas = $('trail-canvas');
   const ctx = canvas.getContext('2d');
   let points = [];
+  let ripples = [];
   let raf = 0;
   let dpr = 1;
+  let active = true;
+  const TRAIL_MS = 520;
+  const RIPPLE_MS = 560;
   function resize(){
     dpr = Math.min(2, window.devicePixelRatio || 1);
     canvas.width = Math.floor(window.innerWidth * dpr);
     canvas.height = Math.floor(window.innerHeight * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
+  function kick(){
+    if (!raf) raf = requestAnimationFrame(draw);
+  }
   function push(x, y){
     points.push({x, y, t: performance.now()});
     if (points.length > 34) points = points.slice(-34);
-    if (!raf) raf = requestAnimationFrame(draw);
+    kick();
+  }
+  function ripple(x, y){
+    ripples.push({x, y, t: performance.now()});
+    if (ripples.length > 8) ripples = ripples.slice(-8);
+    kick();
   }
   function draw(){
     const now = performance.now();
-    points = points.filter((p) => now - p.t < 520);
+    points = points.filter((p) => now - p.t < TRAIL_MS);
+    ripples = ripples.filter((r) => now - r.t < RIPPLE_MS);
     ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-    if (points.length < 2){ points = []; raf = 0; return; }
-    for (let i = 1; i < points.length; i++){
-      const a = points[i - 1], b = points[i];
-      const power = 1 - (now - b.t) / 520;
-      const ratio = i / points.length;
-      ctx.strokeStyle = `hsla(${238 + ratio * 46}, ${66 - (1 - power) * 18}%, ${60 + ratio * 6}%, ${0.5 * power})`;
-      ctx.lineWidth = 1.8 + 8 * power * ratio;
-      ctx.lineCap = 'round';
+    let busyWork = false;
+    if (points.length >= 2){
+      busyWork = true;
+      for (let i = 1; i < points.length; i++){
+        const a = points[i - 1], b = points[i];
+        const power = 1 - (now - b.t) / TRAIL_MS;
+        const ratio = i / points.length;
+        ctx.strokeStyle = `hsla(${238 + ratio * 46}, ${66 - (1 - power) * 18}%, ${60 + ratio * 6}%, ${0.5 * power})`;
+        ctx.lineWidth = 1.8 + 8 * power * ratio;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      const head = points[points.length - 1];
+      const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 18);
+      glow.addColorStop(0, 'rgba(109,92,224,.4)');
+      glow.addColorStop(1, 'rgba(109,92,224,0)');
+      ctx.fillStyle = glow;
       ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
+      ctx.arc(head.x, head.y, 18, 0, Math.PI * 2);
+      ctx.fill();
     }
-    const head = points[points.length - 1];
-    const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 18);
-    glow.addColorStop(0, 'rgba(109,92,224,.4)');
-    glow.addColorStop(1, 'rgba(109,92,224,0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(head.x, head.y, 18, 0, Math.PI * 2);
-    ctx.fill();
-    raf = requestAnimationFrame(draw);
+    // 点击涟漪：一圈扩散波 + 中心小圆点淡出
+    for (const r of ripples){
+      busyWork = true;
+      const p = (now - r.t) / RIPPLE_MS;
+      const ease = 1 - Math.pow(1 - p, 3);
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, 7 + 34 * ease, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(109,92,224,${0.5 * (1 - p)})`;
+      ctx.lineWidth = 2.4 * (1 - p) + 0.6;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(109,92,224,${0.6 * (1 - p)})`;
+      ctx.fill();
+    }
+    if (busyWork){ raf = requestAnimationFrame(draw); }
+    else { raf = 0; }
   }
   function enable(on){
+    active = on;
     canvas.classList.toggle('off', !on);
     if (!on){
       points = [];
+      ripples = [];
       if (raf){ cancelAnimationFrame(raf); raf = 0; }
       ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
     }
   }
-  document.addEventListener('pointermove', (ev) => { if (!canvas.classList.contains('off')) push(ev.clientX, ev.clientY); }, {passive: true});
+  // 用 active 判断而不是读 classList，避免与 enable 时序打架
+  const onMove = (ev) => { if (active) push(ev.clientX, ev.clientY); };
+  document.addEventListener('pointermove', onMove, {passive: true});
+  document.addEventListener('mousemove', onMove, {passive: true});
+  document.addEventListener('pointerdown', (ev) => {
+    if (active) ripple(ev.clientX, ev.clientY);
+  }, {passive: true});
   window.addEventListener('resize', resize);
   resize();
   const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -564,6 +695,8 @@ const BG_DIM = {
 };
 const BG_FALLBACK = 'linear-gradient(160deg,#f0f2ff,#f9f4ff 55%,#eef7fb)';
 let PREFS = {ui_font: 'system', ui_font_size: 'm', ui_trail: 'on', bg_mode: 'default', bg_dim: 'medium'};
+let BG = {mode: 'default', dim: 'medium', has_custom: false};
+let bgStamp = 0;
 $('ui-font').innerHTML = FONTS.map((f) => `<option value="${f.id}">${f.name}</option>`).join('');
 function applyPrefs(){
   const font = FONTS.find((f) => f.id === PREFS.ui_font) || FONTS[0];
@@ -578,28 +711,73 @@ function applyPrefs(){
   const want = PREFS.ui_trail === 'on' ? true : (PREFS.ui_trail === 'off' ? false : !trail.reduced);
   trail.enable(want);
 }
+function bgCustomUrl(){
+  const base = (API_BASE === null || API_BASE === undefined) ? '' : API_BASE;
+  return `${base}/bg/custom?v=${bgStamp}`;
+}
 function applyBackground(){
-  let image = PREFS.bg_mode === 'plain' ? '' : 'url("bg.jpg") center top / cover no-repeat fixed, ';
+  let image = '';
+  if (BG.mode === 'custom' && BG.has_custom){
+    image = `url("${bgCustomUrl()}") center top / cover no-repeat fixed, `;
+  } else if (BG.mode === 'default'){
+    image = 'url("bg.jpg") center top / cover no-repeat fixed, ';
+  }
   document.documentElement.style.setProperty(
-    '--bg-stack', `linear-gradient(180deg,${BG_DIM[PREFS.bg_dim] || BG_DIM.medium}), ${image}${BG_FALLBACK}`);
-  $('ui-bg').value = PREFS.bg_mode;
-  $('ui-bg-dim').value = PREFS.bg_dim;
+    '--bg-stack', `linear-gradient(180deg,${BG_DIM[BG.dim] || BG_DIM.medium}), ${image}${BG_FALLBACK}`);
+  $('ui-bg').value = BG.mode;
+  $('ui-bg-dim').value = BG.dim;
+  $('bg-note').textContent = BG.mode === 'custom'
+    ? (BG.has_custom ? '使用你上传的图' : '还没上传，点「换背景图」')
+    : (BG.mode === 'plain' ? '纯色渐变' : '插件自带');
 }
 async function savePrefs(){
   try { await api('/api/prefs', PREFS); } catch (err) { /* 偏好存不下不影响做题 */ }
 }
-['ui-font', 'ui-size', 'ui-trail', 'ui-bg', 'ui-bg-dim'].forEach((id) => {
+async function setBackground(body){
+  $('bg-note').textContent = '处理中…';
+  try {
+    const res = await api('/api/background', body);
+    if (res.background){ BG = Object.assign({}, BG, res.background); bgStamp = Date.now(); applyBackground(); }
+    $('bg-note').textContent = res.ok ? (res.message || '已应用') : (res.error || '失败');
+  } catch (err){ $('bg-note').textContent = '失败：' + err; }
+}
+['ui-font', 'ui-size', 'ui-trail'].forEach((id) => {
   $(id).onchange = () => {
     PREFS.ui_font = $('ui-font').value;
     PREFS.ui_font_size = $('ui-size').value;
     PREFS.ui_trail = $('ui-trail').value;
-    PREFS.bg_mode = $('ui-bg').value;
-    PREFS.bg_dim = $('ui-bg-dim').value;
     applyPrefs();
-    applyBackground();
     savePrefs();
   };
 });
+$('ui-bg').onchange = async () => {
+  const mode = $('ui-bg').value;
+  if (mode === 'custom' && !BG.has_custom){ $('ui-bg').value = BG.mode; $('bg-file').click(); return; }
+  await setBackground({action: 'mode', mode});
+};
+$('ui-bg-dim').onchange = () => setBackground({action: 'mode', mode: BG.mode, dim: $('ui-bg-dim').value});
+$('btn-bg-reset').onclick = () => setBackground({action: 'reset'});
+$('btn-bg-upload').onclick = () => $('bg-file').click();
+$('bg-file').onchange = async () => {
+  const file = $('bg-file').files && $('bg-file').files[0];
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024){
+    $('bg-note').textContent = `图片 ${(file.size / 1048576).toFixed(1)}MB，超过 8MB 限制`;
+    $('bg-file').value = '';
+    return;
+  }
+  $('bg-note').textContent = '上传中…';
+  try {
+    const dataUrl = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
+    await setBackground({action: 'upload', image_base64: dataUrl});
+  } catch (err){ $('bg-note').textContent = String(err); }
+  $('bg-file').value = '';
+};
 applyPrefs();
 applyBackground();
 
@@ -681,17 +859,20 @@ function openStarter(id){
   const bank = meta.bank_size || meta.count;
   const min = Math.min(meta.min_items || 4, bank);
   const officialCount = meta.official_count || 0;   // ⚠ 必须先声明再用（TDZ 会让点击静默失败）
+  const defN = Math.min(Math.max(meta.default_items || 0, min), bank);
   $('starter-name').textContent = meta.name;
   $('starter-note').textContent = officialCount
-    ? `题库 ${bank} 题。默认按官方 ${officialCount} 题作答并套用官方分级；选更多题则进入「扩展自评」，不套官方分级。`
+    ? (defN === officialCount
+        ? `题库 ${bank} 题。默认「官方 ${officialCount} 题」套用官方分级；选更多题则进入「扩展自评」。`
+        : `题库 ${bank} 题。默认 ${defN} 题走「扩展自评」；选「官方 ${officialCount} 题」才套用官方分级。`)
     : `题库 ${bank} 题，每次随机抽题（两次不会完全一样，用来减少「记住上次答案」的偏差）。`;
 
   // 选项：按题库大小给一组合适的档位，永远至少有两个可选值
   let opts;
   if (officialCount){
-    // 官方量表：默认走官方原题（套官方分级），选更多题则进入「扩展自评」
-    const ladder = [20, 30, 40, 60, 100].filter((x) => x <= bank && x > officialCount);
-    opts = [{n: officialCount, label: `官方 ${officialCount} 题`, sub: '默认 · 套官方分级'}]
+    // 官方量表：官方原题（套官方分级）保留为可选项；默认与其余档位走「扩展自评」
+    const ladder = [10, 20, 30, 40, 60, 100].filter((x) => x <= bank && x > officialCount);
+    opts = [{n: officialCount, label: `官方 ${officialCount} 题`, sub: '套官方分级'}]
       .concat(ladder.map((x) => ({n: x, label: `${x} 题`, sub: x >= bank ? '全部题库 · 扩展自评' : '扩展自评'})));
   } else if (meta.fixed){
     opts = [{n: bank, label: `官方 ${bank} 题`, sub: '固定'}];
@@ -704,7 +885,7 @@ function openStarter(id){
       opts = [{n: bank, label: `全部 ${bank} 题`, sub: '这份量表很短'}];
     }
   }
-  const def = Math.min(Math.max(meta.default_items || opts[0].n, min), bank);
+  const def = defN;
   PICK_COUNT = opts.some((o) => o.n === def) ? def : opts[0].n;
   $('starter-counts').innerHTML = opts.map((o) =>
     `<button class="cchip ${o.n === PICK_COUNT ? 'on' : ''}" data-n="${o.n}">${o.label}<small>${o.sub}</small></button>`).join('');
@@ -1235,12 +1416,132 @@ document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => { if (tab.dataset.tab === 'records') loadRecords(); });
 });
 
+// ── 猫娘塔罗 ────────────────────────────────────────────────
+let TAROT_SPREADS = [];
+let TAROT_INTERPRETS = {};
+let CURRENT_DRAW = null;
+let tarotPick = 'three';
+let tarotTimer = null;
+
+function loadTarotInfo(){
+  api('/api/tarot').then((info) => {
+    if (!info || info.ok === false) return;
+    TAROT_SPREADS = info.spreads || [];
+    TAROT_INTERPRETS = info.interprets || {};
+    if (!$('tspreads').childElementCount && TAROT_SPREADS.length){
+      $('tspreads').innerHTML = TAROT_SPREADS.map((s) =>
+        `<div class="tchip${s.id === tarotPick ? ' on' : ''}" data-spread="${s.id}">
+           <b>${esc(s.name)}</b><small>${esc(s.sub)} · ${s.count} 张</small></div>`).join('');
+      document.querySelectorAll('#tspreads .tchip').forEach((chip) => {
+        chip.onclick = () => {
+          tarotPick = chip.dataset.spread;
+          document.querySelectorAll('#tspreads .tchip').forEach((c) => c.classList.toggle('on', c === chip));
+        };
+      });
+    }
+    const hist = info.history || [];
+    $('thist').innerHTML = hist.length
+      ? hist.map((h) => {
+          const d = new Date((h.ts || 0) * 1000);
+          const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+          return `<div class="thist-item" data-id="${esc(h.id)}">
+            <span class="h-when">${when}</span>
+            <span class="h-spread">${esc(h.spread_name)}</span>
+            <span class="muted">${esc(h.question || '（没有具体问题）')}</span></div>`;
+        }).join('')
+      : '<div class="muted">还没有占卜过喵。</div>';
+    document.querySelectorAll('.thist-item').forEach((el) => {
+      el.onclick = () => {
+        const entry = hist.find((h) => h.id === el.dataset.id);
+        if (entry) renderTarot(entry, TAROT_INTERPRETS[entry.id] || '');
+      };
+    });
+  }).catch(() => {});
+}
+
+function renderTarot(draw, interpretText){
+  CURRENT_DRAW = draw;
+  const box = $('tdraw');
+  box.innerHTML = '';
+  (draw.cards || []).forEach((c, i) => {
+    const el = document.createElement('div');
+    el.className = 'tcard';
+    const keys = (c.reversed ? c.rev : c.up) || [];
+    el.innerHTML = `<div class="inner">
+        <div class="tback"></div>
+        <div class="tface"><img src="${esc(c.img)}" alt="${esc(c.name)}" loading="lazy" class="${c.reversed ? 'rev' : ''}"></div>
+      </div>
+      <div class="tmeta"><span class="pos">${esc(c.position)}</span><b>${esc(c.name)} · ${c.reversed ? '逆位' : '正位'}</b>
+      <span class="keys">${esc(keys.join('、'))}</span></div>`;
+    box.appendChild(el);
+    setTimeout(() => el.classList.add('flip'), 320 + i * 430);
+  });
+  $('tq-label').textContent = draw.question ? `「${draw.question}」` : '（没有具体问题）';
+  $('tresult').classList.remove('hidden');
+  const bubble = $('tinterpret');
+  if (interpretText){ bubble.textContent = interpretText; bubble.classList.remove('hidden'); }
+  else { bubble.textContent = ''; bubble.classList.add('hidden'); }
+}
+
+$('btn-tarot').onclick = async () => {
+  if (tarotTimer){ clearInterval(tarotTimer); tarotTimer = null; }
+  const st = $('st-tarot');
+  st.textContent = '洗牌中…';
+  st.style.color = 'var(--ink2)';
+  try {
+    const res = await api('/api/tarot/draw', { spread: tarotPick, question: $('tq').value.trim() });
+    if (!res.ok){ st.textContent = res.error || '失败'; st.style.color = 'var(--bad)'; return; }
+    renderTarot(res.draw, '');
+    st.textContent = '抽好了喵';
+    st.style.color = 'var(--ok)';
+  } catch (err){ st.textContent = String(err); st.style.color = 'var(--bad)'; }
+};
+
+$('btn-interpret').onclick = async () => {
+  if (!CURRENT_DRAW || !CURRENT_DRAW.id) return;
+  if (tarotTimer){ clearInterval(tarotTimer); tarotTimer = null; }
+  const st = $('st-interp');
+  st.textContent = '本喵正在解读…';
+  st.style.color = 'var(--ink2)';
+  try {
+    const res = await api('/api/tarot/interpret', { draw_id: CURRENT_DRAW.id });
+    if (!res.ok){ st.textContent = res.error || '失败'; st.style.color = 'var(--bad)'; return; }
+    pollTarotJob();
+  } catch (err){ st.textContent = String(err); st.style.color = 'var(--bad)'; }
+};
+
+function pollTarotJob(){
+  tarotTimer = setInterval(async () => {
+    try {
+      const info = await api('/api/tarot');
+      const job = info.job || {};
+      if (job.status === 'running' && job.draw_id === CURRENT_DRAW.id) return;
+      clearInterval(tarotTimer); tarotTimer = null;
+      const st = $('st-interp');
+      if (job.draw_id === CURRENT_DRAW.id && job.text){
+        $('tinterpret').textContent = job.text;
+        $('tinterpret').classList.remove('hidden');
+        st.textContent = '解读好了喵'; st.style.color = 'var(--ok)';
+      } else {
+        st.textContent = '解读失败，稍后再试'; st.style.color = 'var(--bad)';
+      }
+      loadTarotInfo();
+    } catch (err){ /* 下轮再试 */ }
+  }, 1500);
+}
+
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => { if (tab.dataset.tab === 'tarot') loadTarotInfo(); });
+});
+
 // ── 启动 ─────────────────────────────────────────────────────
 (async () => {
   await loadScales();
   try {
     const res = await api('/api/prefs', {});
-    if (res.prefs){ PREFS = Object.assign({}, PREFS, res.prefs); applyPrefs(); applyBackground(); }
+    if (res.prefs){ PREFS = Object.assign({}, PREFS, res.prefs); applyPrefs(); }
+    if (res.background){ BG = Object.assign({}, BG, res.background); bgStamp = Date.now(); }
+    applyBackground();
   } catch (err) { /* 偏好读不到就用默认 */ }
   $('crisis').innerHTML = CRISIS.map((l) => `<li>${esc(l)}</li>`).join('');
 })();

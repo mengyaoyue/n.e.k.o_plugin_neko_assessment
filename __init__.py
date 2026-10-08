@@ -1,19 +1,24 @@
 """心理测评室（neko_assessment）
 
 心理测评 + 人格测评 + 趣味测评，集成在一个面板里：
-- 科学量表用**公共领域 / 公开可复现**的条目（Mini-IPIP、PHQ-9、GAD-7、UCLA 简版）；
-- 类型类与趣味量表是**本插件原创条目**；
+- 人格/职业量表照搬**公开可复现**的开放工具原题（大五人格用 IPIP/Goldberg 公共领域题库、
+  16 型用 OEJTS 1.2、职业兴趣用 O*NET Interest Profiler）；
+- 情绪健康用公开筛查工具（PHQ-9、GAD-7、UCLA 简版）；
+- 其余量表为本插件自编条目，已在来源里如实标注「自编」；
 - 全部数据**只存本机 data/，不上传、不联网**；
 - 只作自我了解与反思，**不是医学诊断**。
 """
 
 from __future__ import annotations
 
+import asyncio
 import random
+import threading
 import time
 import traceback
+import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 def _mark(step: str) -> None:
@@ -49,6 +54,7 @@ try:
         neko_plugin,
     )
 
+    from . import _tarot
     from ._engine import score
     from ._panel import PanelServer, find_open_port, guess_mime
     from ._scales import CATEGORIES, CRISIS_LINES, get_scale, list_scales
@@ -86,6 +92,9 @@ class AssessmentPlugin(NekoPluginBase):
             self._panel_server: Optional[PanelServer] = None
             self._prefs: Optional[dict] = None
             self._store: Optional[RecordStore] = None
+            # 塔罗：状态文件独立（data/tarot.json），解读任务在后台线程跑
+            self._tarot_lock = threading.Lock()
+            self._tarot_job: dict[str, Any] = {"status": "idle", "draw_id": "", "text": ""}
         except Exception:
             _dump_crash("init")
             raise
@@ -108,8 +117,8 @@ class AssessmentPlugin(NekoPluginBase):
         return path
 
     def _bg_file(self) -> Optional[Path]:
-        prefs = self._prefs_payload()
-        name = str(prefs.get("bg_file") or "").strip()
+        saved = self._prefs if isinstance(self._prefs, dict) else {}
+        name = str(saved.get("bg_file") or "").strip()
         if name:
             candidate = (self._bg_dir() / Path(name).name).resolve()
             if candidate.is_file():
@@ -162,8 +171,13 @@ class AssessmentPlugin(NekoPluginBase):
             ("POST", "/api/history"): self._api_history,
             ("GET", "/api/prefs"): self._api_prefs,
             ("POST", "/api/prefs"): self._api_prefs,
+            ("GET", "/api/background"): self._api_background,
+            ("POST", "/api/background"): self._api_background,
             ("POST", "/api/export"): self._api_export,
             ("POST", "/api/card"): self._api_card,
+            ("GET", "/api/tarot"): self._api_tarot_info,
+            ("POST", "/api/tarot/draw"): self._api_tarot_draw,
+            ("POST", "/api/tarot/interpret"): self._api_tarot_interpret,
         }
         port = find_open_port(self._panel_port)
         server = PanelServer(
@@ -393,8 +407,9 @@ class AssessmentPlugin(NekoPluginBase):
                 prefs[key] = value[:32]
                 changed = True
         if changed:
-            self._prefs = prefs
-            save_prefs(self._prefs_path(), prefs)
+            raw = dict(self._prefs) if isinstance(self._prefs, dict) else {}
+            raw.update(prefs)
+            self._save_prefs(raw)
         background = self._background_state()
         return {"ok": True, "prefs": prefs, "background": background}
 
@@ -405,13 +420,19 @@ class AssessmentPlugin(NekoPluginBase):
             mode = "default"
         custom = self._bg_file()
         if mode == "custom" and custom is None:
-            mode = "default"
+            mode = "default"          # 图没了就退回默认，别留一片空白
         return {
             "mode": mode,
             "dim": prefs.get("bg_dim", "medium"),
             "has_custom": custom is not None,
+            "custom_bytes": custom.stat().st_size if custom is not None else 0,
+            "custom_name": custom.name if custom is not None else "",
             "custom_path": "/bg/custom",
         }
+
+    def _save_prefs(self, prefs: dict) -> None:
+        self._prefs = prefs
+        save_prefs(self._prefs_path(), prefs)
 
     def _bg_asset(self) -> Optional[tuple[bytes, str]]:
         path = self._bg_file()
@@ -427,6 +448,305 @@ class AssessmentPlugin(NekoPluginBase):
         if rel in ("bg/custom", "bg/custom.jpg", "bg/custom.png"):
             return self._bg_asset()
         return None
+
+    _BG_MAX_BYTES = 8 * 1024 * 1024
+    _BG_MIME_EXT = {
+        "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
+        "image/webp": ".webp", "image/gif": ".gif",
+    }
+
+    def _api_background(self, body: dict) -> dict:
+        """上传 / 切换 / 恢复自定义背景。图存 data/backgrounds/，不进安装包。"""
+        import base64
+
+        payload = body if isinstance(body, dict) else {}
+        action = str(payload.get("action") or "").strip() or "mode"
+        prefs = dict(self._prefs) if isinstance(self._prefs, dict) else {}
+        if action == "upload":
+            raw = str(payload.get("image_base64") or payload.get("image") or "").strip()
+            if not raw:
+                return {"ok": False, "error": "没有收到图片数据。", "background": self._background_state()}
+            if raw.startswith("data:"):
+                head, _, encoded = raw.partition(",")
+                mime = head[5:].split(";")[0].strip().lower()
+            else:
+                encoded, mime = raw, "image/png"
+            ext = self._BG_MIME_EXT.get(mime)
+            if not ext:
+                return {"ok": False, "error": f"不支持的格式：{mime or '未知'}", "background": self._background_state()}
+            try:
+                blob = base64.b64decode(encoded or "", validate=False)
+            except Exception:
+                return {"ok": False, "error": "图片数据解不开。", "background": self._background_state()}
+            if not blob:
+                return {"ok": False, "error": "图片是空的。", "background": self._background_state()}
+            if len(blob) > self._BG_MAX_BYTES:
+                return {"ok": False, "error": f"图片超过 {self._BG_MAX_BYTES // 1048576}MB 限制。", "background": self._background_state()}
+            for suffix in (".png", ".jpg", ".webp", ".gif"):
+                stale = self._bg_dir() / f"custom{suffix}"
+                if stale.is_file():
+                    try:
+                        stale.unlink()
+                    except Exception:
+                        pass
+            target = self._bg_dir() / f"custom{ext}"
+            try:
+                target.write_bytes(blob)
+            except Exception as exc:
+                return {"ok": False, "error": str(exc), "background": self._background_state()}
+            prefs["bg_mode"] = "custom"
+            prefs["bg_file"] = target.name
+            self._save_prefs(prefs)
+            return {"ok": True, "message": "背景已换成你上传的图。", "background": self._background_state()}
+        if action == "reset":
+            prefs["bg_mode"] = "default"
+            self._save_prefs(prefs)
+            return {"ok": True, "message": "已恢复默认背景。", "background": self._background_state()}
+        mode = str(payload.get("mode") or "").strip() or str(prefs.get("bg_mode") or "default")
+        if mode not in ("default", "custom", "plain"):
+            return {"ok": False, "error": f"未知模式：{mode}", "background": self._background_state()}
+        if mode == "custom" and self._bg_file() is None:
+            return {"ok": False, "error": "还没上传过背景图。", "background": self._background_state()}
+        prefs["bg_mode"] = mode
+        dim = str(payload.get("dim") or "").strip()
+        if dim in ("light", "medium", "strong"):
+            prefs["bg_dim"] = dim
+        self._save_prefs(prefs)
+        return {"ok": True, "background": self._background_state()}
+
+    # ── 猫娘塔罗 ───────────────────────────────────────────────
+    _TAROT_SYSTEM = (
+        "你是猫娘塔罗解读师，用猫娘口吻解读塔罗牌。规则："
+        "1. 只依据给出的牌名、正逆位与传统关键词解读，不许编造关键词以外的信息；"
+        "2. 语气温柔俏皮，自称本喵，称呼用户为主人；"
+        "3. 逐张牌简短解读后，给一段整体总结和一条具体建议；"
+        "4. 全文 300 字以内，纯文本，不要任何列表符号或标题格式。"
+    )
+
+    def _tarot_path(self) -> Path:
+        return self._data_dir() / "tarot.json"
+
+    def _tarot_read(self) -> dict:
+        import json
+
+        try:
+            data = json.loads(self._tarot_path().read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _tarot_write(self, state: dict) -> None:
+        """原子写：.tmp → os.replace，绝不出现半截 JSON。"""
+        import json
+        import os
+
+        self._tarot_path().parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._tarot_path().with_name("tarot.json.tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, self._tarot_path())
+
+    def _tarot_update(self, mutate) -> None:
+        with self._tarot_lock:
+            state = self._tarot_read()
+            try:
+                mutate(state)
+                self._tarot_write(state)
+            except Exception as exc:
+                self.logger.warning("[assessment] 塔罗状态写入失败：{}", exc)
+
+    def _api_tarot_info(self, _body: dict) -> dict:
+        state = self._tarot_read()
+        history = state.get("history")
+        history = history if isinstance(history, list) else []
+        readings = state.get("readings")
+        readings = readings if isinstance(readings, dict) else {}
+        interprets = {
+            str(k): (v.get("interpret") if isinstance(v, dict) else "")
+            for k, v in readings.items()
+        }
+        return {
+            "ok": True,
+            "spreads": _tarot.spread_meta(),
+            "history": history[:_tarot._MAX_HISTORY],
+            "interprets": interprets,
+            "job": self._tarot_job,
+        }
+
+    def _api_tarot_draw(self, body: dict) -> dict:
+        payload = body if isinstance(body, dict) else {}
+        spread_id = str(payload.get("spread") or "").strip() or "three"
+        question = str(payload.get("question") or "").strip()
+        drawn = _tarot.draw(spread_id, question)
+        if drawn is None:
+            return {"ok": False, "error": f"未知牌阵：{spread_id}", "spreads": _tarot.spread_meta()}
+        draw_id = uuid.uuid4().hex[:10]
+        entry = {
+            "id": draw_id,
+            "ts": int(time.time()),
+            "interpret": "",
+            "interpret_kind": "",
+            **drawn,
+        }
+
+        def mutate(state: dict) -> None:
+            history = state.setdefault("history", [])
+            if isinstance(history, list):
+                history.insert(0, {
+                    k: entry[k] for k in
+                    ("id", "ts", "spread", "spread_name", "question", "cards")
+                })
+                del history[_tarot._MAX_HISTORY:]
+            readings = state.setdefault("readings", {})
+            readings[draw_id] = entry
+            keep = {h.get("id") for h in history if isinstance(h, dict)}
+            for k in [k for k in readings if k not in keep]:
+                readings.pop(k, None)
+
+        self._tarot_update(mutate)
+        return {"ok": True, "draw": entry, "job": self._tarot_job}
+
+    def _api_tarot_interpret(self, body: dict) -> dict:
+        payload = body if isinstance(body, dict) else {}
+        draw_id = str(payload.get("draw_id") or "").strip()
+        entry = self._tarot_read().get("readings", {}).get(draw_id)
+        if not isinstance(entry, dict):
+            return {"ok": False, "error": "没有找到这次占卜的记录喵，重新抽一次吧。", "job": self._tarot_job}
+        if self._tarot_job.get("status") == "running" and self._tarot_job.get("draw_id") == draw_id:
+            return {"ok": True, "job": self._tarot_job}
+        if str(entry.get("interpret") or "").strip():
+            # 已有解读：直接回，不再花一次模型钱
+            self._tarot_job = {
+                "status": "done", "draw_id": draw_id,
+                "text": entry["interpret"], "kind": entry.get("interpret_kind") or "llm",
+            }
+            return {"ok": True, "job": self._tarot_job}
+        self._tarot_job = {"status": "running", "draw_id": draw_id, "text": ""}
+        threading.Thread(
+            target=self._tarot_worker, args=(draw_id,), daemon=True, name="neko-assess-tarot"
+        ).start()
+        return {"ok": True, "job": self._tarot_job}
+
+    def _tarot_worker(self, draw_id: str) -> None:
+        """后台线程：私有事件循环调 LLM，绝不碰宿主循环。"""
+        try:
+            entry = self._tarot_read().get("readings", {}).get(draw_id) or {}
+            drawn = {
+                "question": entry.get("question", ""),
+                "spread_name": entry.get("spread_name", ""),
+                "cards": entry.get("cards", []),
+            }
+            text, kind = "", "llm"
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    text = loop.run_until_complete(self._tarot_llm(drawn))
+                finally:
+                    loop.close()
+            except Exception as exc:
+                self.logger.warning("[assessment] 塔罗 LLM 解读失败，降级为牌义摆盘：{}", exc)
+                text, kind = _tarot.fallback_reading(drawn), "fallback"
+            if not str(text or "").strip():
+                text, kind = _tarot.fallback_reading(drawn), "fallback"
+            self._tarot_job = {
+                "status": "done", "draw_id": draw_id, "text": text, "kind": kind,
+            }
+
+            def mutate(state: dict) -> None:
+                readings = state.setdefault("readings", {})
+                if isinstance(readings.get(draw_id), dict):
+                    readings[draw_id]["interpret"] = text
+                    readings[draw_id]["interpret_kind"] = kind
+
+            self._tarot_update(mutate)
+        except Exception as exc:
+            self.logger.warning("[assessment] 塔罗解读线程异常：{}", traceback.format_exc())
+            self._tarot_job = {"status": "error", "draw_id": draw_id, "text": f"解读出了点问题：{exc}"}
+
+    async def _tarot_llm(self, drawn: dict) -> str:
+        cfg: dict[str, Any] = {}
+        try:
+            from utils.config_manager import get_config_manager
+
+            cfg = get_config_manager().get_model_api_config("conversation")
+            cfg = cfg if isinstance(cfg, dict) else {}
+        except Exception as exc:
+            self.logger.info("[assessment] 读取模型配置失败：{}", exc)
+        model = str(cfg.get("model") or "").strip()
+        base_url = str(cfg.get("base_url") or "").strip().rstrip("/")
+        api_key = str(cfg.get("api_key") or "").strip()
+        if not (model and base_url and api_key):
+            raise RuntimeError("尚未配置会话模型")
+        user = "\n".join(_tarot.card_lines(drawn))
+
+        # 优先官方 llm_client；TypeError 兼容无 provider_type 参数的旧签名
+        try:
+            from utils.llm_client import create_chat_llm_async
+
+            kwargs: dict[str, Any] = {
+                "model": model, "base_url": base_url, "api_key": api_key,
+                "max_completion_tokens": 1024, "timeout": 60.0,
+            }
+            try:
+                llm = create_chat_llm_async(**kwargs)
+            except TypeError:
+                provider_type = str(cfg.get("provider_type") or "").strip() or None
+                if provider_type:
+                    kwargs["provider_type"] = provider_type
+                llm = create_chat_llm_async(**kwargs)
+            result = await asyncio.wait_for(
+                llm.ainvoke([
+                    {"role": "system", "content": self._TAROT_SYSTEM},
+                    {"role": "user", "content": user},
+                ]),
+                timeout=60.0,
+            )
+            text = getattr(result, "content", None) or str(result or "")
+            if str(text).strip():
+                return str(text).strip()
+            raise RuntimeError("模型返回为空")
+        except ImportError:
+            pass
+        except Exception as exc:
+            self.logger.warning("[assessment] llm_client 调用失败，降级直连：{}", exc)
+        return await asyncio.to_thread(self._tarot_llm_http, base_url, api_key, model, user)
+
+    def _tarot_llm_http(self, base_url: str, api_key: str, model: str, user: str) -> str:
+        import json
+        import urllib.error
+        import urllib.request
+
+        endpoint = f"{base_url}/chat/completions"
+        body = json.dumps(
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": self._TAROT_SYSTEM},
+                    {"role": "user", "content": user},
+                ],
+                "max_completion_tokens": 1024,
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            endpoint,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60.0) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"模型请求失败：HTTP {exc.code}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"模型请求失败：{exc}") from exc
+        choices = payload.get("choices") or []
+        if not choices:
+            raise RuntimeError("模型没有返回内容")
+        return str((choices[0].get("message") or {}).get("content") or "").strip()
 
     # ── 聊天入口（轻量，方便在对话框里唤起）────────────────────
     @message(id="assessment_chat", source="chat")

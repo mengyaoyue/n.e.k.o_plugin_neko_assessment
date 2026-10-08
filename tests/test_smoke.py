@@ -423,10 +423,12 @@ def test_dataset_meta_complete():
         assert scale.get("method"), f"{scale['id']} 缺算分说明"
         assert 1 <= scale["min_items"] <= len(scale["bank"])
         assert 1 <= scale["default_items"] <= len(scale["bank"])
+        # 任何测评默认都要至少 10 题（不能出现「3 题测评」这种观感）
+        assert scale["default_items"] >= 10, f"{scale['id']} 默认题数不足 10：{scale['default_items']}"
         if scale["id"] in scales.FIXED_SCALES:
-            # 官方量表：默认按官方题数作答（套官方分级），题库里另有扩展题供「扩展自评」
+            # 官方量表：默认至少 10 题走扩展自评；官方原题保留为可选项
             assert scale.get("official_count"), f"{scale['id']} 缺官方题数"
-            assert scale["default_items"] == scale["official_count"]
+            assert scale["default_items"] >= max(scale["official_count"], 10)
             assert len(scale["bank"]) > scale["official_count"] + 5
 
 
@@ -512,6 +514,48 @@ def test_share_card_is_saved_to_disk(tmp_path):
     # 路由要挂上
     src = (ROOT / "__init__.py").read_text(encoding="utf-8")
     assert '"/api/card"' in src and "_api_card" in src
+
+
+def test_custom_background_upload_and_reset(tmp_path):
+    """自定义背景：上传落盘到 data/backgrounds/custom.*，可切模式与恢复默认。"""
+    import base64
+
+    cls = _plugin_cls()
+
+    class _Fake(cls):
+        def __init__(self):
+            self._prefs = {}
+
+        def _data_dir(self):
+            return tmp_path
+
+    fake = _Fake()
+    assert fake._background_state()["mode"] == "default"
+
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c636000000200010005fe02fea7f6a2a60000000049454e44ae426082"
+    )
+    data = "data:image/png;base64," + base64.b64encode(png).decode()
+    up = fake._api_background({"action": "upload", "image_base64": data})
+    assert up["ok"] and up["background"]["mode"] == "custom"
+    assert up["background"]["has_custom"] and up["background"]["custom_name"] == "custom.png"
+    saved = tmp_path / "backgrounds" / "custom.png"
+    assert saved.is_file() and saved.read_bytes() == png
+
+    # 空数据 / 不支持的格式都要挡下来
+    assert fake._api_background({"action": "upload", "image_base64": ""})["ok"] is False
+    assert fake._api_background({"action": "upload", "image_base64": "data:image/tiff;base64,AAAA"})["ok"] is False
+
+    assert fake._api_background({"action": "mode", "mode": "plain"})["background"]["mode"] == "plain"
+    reset = fake._api_background({"action": "reset"})
+    assert reset["ok"] and reset["background"]["mode"] == "default"
+
+    # 路由与前端控件都要在
+    src = (ROOT / "__init__.py").read_text(encoding="utf-8")
+    assert '"/api/background"' in src and "_api_background" in src
+    html = _panel_html()
+    assert 'id="bg-file"' in html and 'id="btn-bg-upload"' in html and 'value="custom"' in html
 
 
 def test_panel_share_card_has_preview_and_clipboard():
@@ -664,3 +708,64 @@ def test_real_scales_keep_their_sources():
         assert scale["official_count"] == count
         assert [i["text"] for i in scale["bank"][:count]] == list(scale["official_texts"])
 
+
+
+# ── 猫娘塔罗 ─────────────────────────────────────────────────
+def test_tarot_deck_complete():
+    tarot = _load("_tarot")
+    assert len(tarot.CARDS) == 78
+    assert sum(1 for c in tarot.CARDS if c["arcana"] == "major") == 22
+    assert sorted(c["n"] for c in tarot.CARDS) == list(range(1, 79))
+    for c in tarot.CARDS:
+        assert c["up"] and c["rev"], f"{c['name']} 缺关键词"
+
+
+def test_tarot_card_images_all_present():
+    tarot = _load("_tarot")
+    missing = [c["n"] for c in tarot.CARDS
+               if not (ROOT / "static" / "tarot" / f"c{c['n']:02d}.jpg").is_file()]
+    assert not missing, f"缺卡面图：{missing[:10]}"
+
+
+def test_tarot_draw_spreads():
+    import random
+    tarot = _load("_tarot")
+    for sid in tarot.spread_ids():
+        drawn = tarot.draw(sid, "测试", rng=random.Random(42))
+        spread = tarot.SPREADS[sid]
+        assert drawn is not None
+        assert [c["position"] for c in drawn["cards"]] == spread["positions"]
+        ns = [c["n"] for c in drawn["cards"]]
+        assert len(set(ns)) == len(ns), "抽牌不应重复"
+    assert tarot.draw("celtic", "") is None
+
+
+def test_tarot_fallback_reading_is_honest():
+    import random
+    tarot = _load("_tarot")
+    drawn = tarot.draw("three", "", rng=random.Random(7))
+    text = tarot.fallback_reading(drawn)
+    assert "本喵" in text
+    for c in drawn["cards"]:
+        assert c["name"] in text and c["position"] in text
+
+
+def test_panel_tarot_tab_present():
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'data-tab="tarot"' in html
+    assert "tspreads" in html and "tdraw" in html and "tinterpret" in html
+    assert "tarot/c" not in html  # 卡面地址由后端数据给出，前端不硬编码牌号
+    # 版权说明：塔罗牌面来源必须在「关于」里写清楚
+    assert "Rider-Waite" in html or "莱德-伟特" in html
+
+
+def test_panel_trail_dual_listener_and_ripple():
+    """轨迹：双事件源兜底 + 点击涟漪（与剪贴板猫娘同款实现）。"""
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert "pointermove" in html
+    assert "mousemove" in html
+    assert "pointerdown" in html
+    assert "RIPPLE_MS" in html
+    assert "ripples" in html
+    # findBase 必须先验活缓存端口（端口漂移曾让面板永久假死）
+    assert "localStorage.removeItem('assess_base')" in html
