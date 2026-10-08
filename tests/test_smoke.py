@@ -769,3 +769,130 @@ def test_panel_trail_dual_listener_and_ripple():
     assert "ripples" in html
     # findBase 必须先验活缓存端口（端口漂移曾让面板永久假死）
     assert "localStorage.removeItem('assess_base')" in html
+
+
+# ── 解压小游戏（电子板 + 切水果，移植自学习辅助猫娘）────────────
+def test_game_config_rules(tmp_path):
+    games = _load("_games")
+    store = games.GameStore(tmp_path / "games.json")
+    config = store.config()
+    assert config["game"] == "fruit"
+    assert len(config["fruits"]) == 7 and config["lives"] == 3
+    assert config["level_step"] == games.LEVEL_STEP and config["level_max"] == games.LEVEL_MAX
+    assert config["bomb"]["key"] == "bomb"
+    assert len(config["badges"]) == len(games.GAME_BADGES)
+    # 等级曲线：1 级起步、封顶、单调
+    assert games.level_of(0) == 1 and games.level_of(119) == 1
+    assert games.level_of(120) == 2
+    assert games.level_of(10 ** 6) == games.LEVEL_MAX
+    d1, d2 = games.difficulty(1), games.difficulty(5)
+    assert d2["spawn_interval"] < d1["spawn_interval"] and d2["fall_speed"] > d1["fall_speed"]
+
+
+def test_game_judge_run_badges():
+    games = _load("_games")
+    # 第一刀 + 破百
+    gained = games.judge_run({"score": 100, "sliced": 1}, {"sliced": 0})
+    assert "game:first_slice" in gained and "game:score100" in gained
+    # 连击 8、10 级、90 秒
+    gained = games.judge_run(
+        {"score": 600, "level": 10, "max_combo": 8, "duration": 95, "sliced": 25},
+        {"sliced": 0},
+    )
+    for key in ("game:combo8", "game:flawless", "game:endure90", "game:level10", "game:score500"):
+        assert key in gained, key
+    # 累计类成就看历史 + 本局
+    gained = games.judge_run({"sliced": 3}, {"sliced": 997})
+    assert "game:total1000" in gained
+
+
+def test_game_store_submit_and_state(tmp_path):
+    games = _load("_games")
+    store = games.GameStore(tmp_path / "games.json")
+    first = store.submit({"score": 120, "level": 2, "max_combo": 5, "duration": 30, "sliced": 10, "missed": 2})
+    assert first["ok"] and first["is_best"] and first["gained"] == ["game:first_slice", "game:score100"]
+    second = store.submit({"score": 90, "level": 1, "max_combo": 3, "duration": 12, "sliced": 8, "missed": 1})
+    assert second["ok"] and not second["is_best"]
+    state = store.state()
+    assert state["best"]["score"] == 120 and state["totals"]["runs"] == 2
+    assert state["totals"]["sliced"] == 18 and len(state["recent"]) == 2
+    owned = {b["key"] for b in state["badges"] if b["owned"]}
+    assert "game:first_slice" in owned and "game:score100" in owned
+    # 坏文件降级为空记录：可以没记录，不能玩不了
+    (tmp_path / "games.json").write_text("{not json", encoding="utf-8")
+    assert store.state()["totals"]["runs"] == 0
+
+
+def test_pad_audio_scan_and_traversal(tmp_path):
+    games = _load("_games")
+    audio = tmp_path / games.PAD_AUDIO_DIR
+    audio.mkdir(parents=True)
+    for name in ("a1.mp3", "a10.mp3", "a2.ogg", ".hidden.mp3", "readme.txt"):
+        (audio / name).write_bytes(b"x")
+    assert games.scan_pad_audio(tmp_path) == ["a1.mp3", "a2.ogg", "a10.mp3"]  # 自然序 + 过滤隐藏/非音频
+    assert games.scan_pad_audio(tmp_path / "nowhere") == []
+    # 防目录穿越：../ 与白名单外后缀一律拒发
+    assert games.pad_audio_asset(tmp_path, "../records.json") is None
+    assert games.pad_audio_asset(tmp_path, "readme.txt") is None
+    assert games.pad_audio_asset(tmp_path, "a1.mp3") == (b"x", "audio/mpeg")
+
+
+def test_api_game_actions(tmp_path):
+    import logging
+
+    cls = _plugin_cls()
+
+    class Fake:
+        data_dir = tmp_path
+        logger = logging.getLogger("neko_test")
+        _AUDIO_MAX_BYTES = cls._AUDIO_MAX_BYTES
+        _games = _load("_games").GameStore(tmp_path / "games.json")
+
+        def _import_pad_audio(self, files):
+            return cls._import_pad_audio(self, files)
+
+    fake = Fake()
+    res = cls._api_game(fake, {"action": "config"})
+    assert res["ok"] and res["config"]["fruits"] and res["config"]["local_audio"] == []
+    res = cls._api_game(fake, {"action": "submit", "run": {"score": 50, "sliced": 4}})
+    assert res["ok"] and res["state"]["totals"]["runs"] == 1
+    res = cls._api_game(fake, {"action": "pad-audio"})
+    assert res["ok"] and res["files"] == []
+    res = cls._api_game(fake, {"action": "import-audio", "files": [
+        {"name": "../evil.txt", "data": "data:audio/mpeg;base64,eA=="},
+        {"name": "miku1.mp3", "data": "data:audio/mpeg;base64,eA=="},
+    ]})
+    assert res["ok"] and res["saved"] == 1 and res["skipped"] == 1
+    assert res["files"] == ["miku1.mp3"]
+    assert cls._api_game(fake, {"action": "submit", "run": "oops"})["ok"] is False
+
+
+def test_panel_play_view_present():
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'data-tab="play"' in html and 'id="view-play"' in html
+    assert 'id="play-modes"' in html
+    # 两个模式的舞台与画布
+    for probe in ('id="mk-stage"', 'id="mk-canvas"', 'id="fr-stage"', 'id="fr-canvas"',
+                  'data-mode="pad"', 'data-mode="fruit"'):
+        assert probe in html, probe
+    # VIEWS 里注册了解压视图，离开时停声音/停帧
+    assert "'play'" in html and "RELAX" in html
+    # 关键行为：十六分音符量化、掉队重同步、tapAt（曾误删）、双路径音源探测
+    script = html.split("<script>", 1)[1]
+    for probe in ("TAP_STEP", "function quantize", "nextStep * STEP) > 1.5",
+                  "function tapAt", "audio/pad/index.json", "setPointerCapture"):
+        assert probe in script, probe
+
+
+def test_game_audio_assets_present():
+    import json
+    pad = ROOT / "static" / "audio" / "pad"
+    manifest = json.loads((pad / "index.json").read_text(encoding="utf-8"))
+    assert manifest["license"] == "CC BY 3.0"
+    assert set(manifest["instruments"]) == {"choir_aahs", "music_box", "marimba"}
+    missing = [n["file"]
+               for spec in manifest["instruments"].values()
+               for n in spec["notes"]
+               if not (pad / n["file"]).is_file()]
+    assert not missing, f"缺采样文件：{missing}"
+    assert (pad / "CREDITS.md").is_file()

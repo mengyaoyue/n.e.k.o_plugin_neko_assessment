@@ -54,7 +54,7 @@ try:
         neko_plugin,
     )
 
-    from . import _tarot
+    from . import _games, _tarot
     from ._engine import score
     from ._panel import PanelServer, find_open_port, guess_mime
     from ._scales import CATEGORIES, CRISIS_LINES, get_scale, list_scales
@@ -95,6 +95,8 @@ class AssessmentPlugin(NekoPluginBase):
             # 塔罗：状态文件独立（data/tarot.json），解读任务在后台线程跑
             self._tarot_lock = threading.Lock()
             self._tarot_job: dict[str, Any] = {"status": "idle", "draw_id": "", "text": ""}
+            # 解压小游戏：切水果记录 + 电子板本地音源（与测评记录完全分开）
+            self._games: Optional[_games.GameStore] = None
         except Exception:
             _dump_crash("init")
             raise
@@ -134,6 +136,7 @@ class AssessmentPlugin(NekoPluginBase):
     async def startup(self, **_):
         try:
             self._store = RecordStore(self._records_path(), logger=self.logger)
+            self._games = _games.GameStore(self._data_dir() / "games.json", logger=self.logger)
             self._prefs = load_prefs(self._prefs_path())
             self._start_panel()
             count = len(list_scales())
@@ -178,6 +181,8 @@ class AssessmentPlugin(NekoPluginBase):
             ("GET", "/api/tarot"): self._api_tarot_info,
             ("POST", "/api/tarot/draw"): self._api_tarot_draw,
             ("POST", "/api/tarot/interpret"): self._api_tarot_interpret,
+            ("GET", "/api/game"): self._api_game,
+            ("POST", "/api/game"): self._api_game,
         }
         port = find_open_port(self._panel_port)
         server = PanelServer(
@@ -447,6 +452,8 @@ class AssessmentPlugin(NekoPluginBase):
         rel = (rel or "").strip().lstrip("/").split("?", 1)[0]
         if rel in ("bg/custom", "bg/custom.jpg", "bg/custom.png"):
             return self._bg_asset()
+        if rel.startswith("pad-audio/"):            # 用户自备的电子板音源（非商业自用）
+            return _games.pad_audio_asset(self.data_dir, rel.split("/", 1)[1])
         return None
 
     _BG_MAX_BYTES = 8 * 1024 * 1024
@@ -513,6 +520,95 @@ class AssessmentPlugin(NekoPluginBase):
             prefs["bg_dim"] = dim
         self._save_prefs(prefs)
         return {"ok": True, "background": self._background_state()}
+
+    # ── 解压小游戏（从学习辅助猫娘移植；与测评记录完全分开）──────
+    def _api_game(self, body: dict) -> dict:
+        """切水果：取规则 / 取记录 / 交成绩；电子板：扫本地音源 / 导入音源。"""
+        if self._games is None:
+            return {"ok": False, "error": "游戏存储未就绪。"}
+        payload = body if isinstance(body, dict) else {}
+        action = str(payload.get("action") or "state").strip() or "state"
+        game = str(payload.get("game") or _games.GAME_FRUIT).strip() or _games.GAME_FRUIT
+        if action == "config":
+            config = self._games.config()
+            config["local_audio"] = _games.scan_pad_audio(self.data_dir)
+            config["local_audio_dir"] = f"data/{_games.PAD_AUDIO_DIR}"
+            return {"ok": True, "config": config, "state": self._games.state(game)}
+        if action in ("import-audio", "import_audio"):
+            files = payload.get("files")
+            if not isinstance(files, list) or not files:
+                return {"ok": False, "error": "没有收到音源文件。"}
+            saved, skipped = self._import_pad_audio(files)
+            return {
+                "ok": True,
+                "saved": saved,
+                "skipped": skipped,
+                "files": _games.scan_pad_audio(self.data_dir),
+                "dir": f"data/{_games.PAD_AUDIO_DIR}",
+            }
+        if action in ("pad-audio", "pad_audio"):
+            return {
+                "ok": True,
+                "files": _games.scan_pad_audio(self.data_dir),
+                "dir": f"data/{_games.PAD_AUDIO_DIR}",
+                "note": (
+                    "把你自己有的音源（mp3/ogg/wav）放进插件 data/"
+                    f"{_games.PAD_AUDIO_DIR}/ 就会自动用上；这些文件不会被打进安装包。"
+                ),
+            }
+        if action == "submit":
+            run = payload.get("run")
+            if not isinstance(run, dict):
+                return {"ok": False, "error": "没有收到成绩数据。", "state": self._games.state(game)}
+            return self._games.submit(run, game)
+        return {"ok": True, "state": self._games.state(game), "config": self._games.config()}
+
+    _AUDIO_MAX_BYTES = 8 * 1024 * 1024
+
+    def _import_pad_audio(self, files: list) -> tuple[int, int]:
+        """把用户在面板里选的本机音源写进 data/mikutap_audio/。
+
+        文件是用户自己在自己机器上选的，插件只负责存到自己的数据目录，
+        发行包里不含任何音频。单文件上限 8MB、总数上限 120 个，避免误选整个音乐库。
+        """
+        import base64
+
+        target_dir = _games.pad_audio_dir(self.data_dir)
+        saved = 0
+        skipped = 0
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self.logger.warning("[assessment] 音源目录创建失败：{}", exc)
+            return 0, len(files)
+        for item in files[:120]:
+            if not isinstance(item, dict):
+                skipped += 1
+                continue
+            name = Path(str(item.get("name") or "")).name
+            if not name or Path(name).suffix.lower() not in _games.AUDIO_EXTS:
+                skipped += 1
+                continue
+            raw = str(item.get("data") or item.get("data_base64") or "").strip()
+            if not raw:
+                skipped += 1
+                continue
+            _, _, encoded = raw.partition(",")
+            try:
+                blob = base64.b64decode(encoded or raw, validate=False)
+            except Exception:
+                skipped += 1
+                continue
+            if not blob or len(blob) > self._AUDIO_MAX_BYTES:
+                skipped += 1
+                continue
+            try:
+                (target_dir / name).write_bytes(blob)
+                saved += 1
+            except Exception:
+                skipped += 1
+        self.logger.info("[assessment] 本地音源导入：成功 {}，跳过 {}", saved, skipped)
+        return saved, skipped
 
     # ── 猫娘塔罗 ───────────────────────────────────────────────
     _TAROT_SYSTEM = (
