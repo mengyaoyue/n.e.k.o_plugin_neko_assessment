@@ -137,6 +137,9 @@ class AssessmentPlugin(NekoPluginBase):
             self._stop_event = threading.Event()
             # 收到过多少次 chat 事件（只记前 40 条日志，用来判断能不能收到她的话）
             self._chat_events: int = 0
+            # 本轮开始的时刻（epoch）。**只认这之后产生的记录**——用记录自己的
+            # 时间戳比对，才能把"迟到的旧回答"和"她刚说的话"分开。
+            self._compat_round_started: float = 0.0
             # 我们自己推出去的原文。**它绝不能当成她的回答**——实时总线里
             # `MESSAGE_PUSH` 这一类就是我们自己的推送，踩过：面板把她答的题显示成
             # 我推的题目原文，「解析成选项 3/4」其实是从我题目的选项编号里抠的。
@@ -704,6 +707,10 @@ class AssessmentPlugin(NekoPluginBase):
     #    300 秒走（真正实现"她答完才发下一题"）；不通就退化成 ③ 的快节奏，
     #    免得 300 秒 × 10 题 = 50 分钟白等。
     _COMPAT_PROBE_WAIT = 60.0
+    # 对话流**不做答案来源**：它没有时间戳，而宿主的落盘是懒触发的、会把几分钟前的
+    # 旧对话一次性刷出来。踩过：上一轮的回答被当成新一轮的答案（面板上就是"跳题"）。
+    # 留着它只是为了在诊断里显示"能不能连上"。
+    _COMPAT_USE_FEED_FOR_ANSWERS = False
     # ③ 退化成快节奏后，问下一题的间隔（只用来避免"连续推送攒成一条"）。
     _COMPAT_GAP_SECONDS = 20.0
     # ③ 整轮窗口：问完之后一直收到这里为止。落盘可能晚好几分钟，也可能要等
@@ -899,13 +906,8 @@ class AssessmentPlugin(NekoPluginBase):
     def _compat_new_texts(self, snap: dict, mark: int) -> list[tuple[str, str]]:
         """她相对游标新说的话：``[(原文, 通道)]``。**总线优先**，它不滞后。"""
         out: list[tuple[str, str]] = []
-        bus = self._yui_bus()
-        if bus is not None:
-            try:
-                out.extend((t, "实时总线") for t in bus.new_texts())
-            except Exception:
-                pass
-        if not out:
+        out = self._compat_fresh_texts()
+        if not out and self._COMPAT_USE_FEED_FOR_ANSWERS:
             feed = self._yui_feed()
             if feed is not None:
                 try:
@@ -916,10 +918,39 @@ class AssessmentPlugin(NekoPluginBase):
             dlg = self._yui_dialog()
             if dlg is not None and dlg.available:
                 try:
-                    out.extend((row["text"], "对话库") for row in dlg.new_replies(mark))
+                    out.extend((row["text"], "对话库")
+                               for row in dlg.new_replies(mark)
+                               if self._compat_is_fresh(row.get("ts")))
                 except Exception:
                     pass
         return [(t, c) for t, c in _dedupe_texts(out) if not self._compat_is_our_push(t)]
+
+    def _compat_is_fresh(self, ts: Any) -> bool:
+        """记录是否产生于**本轮开始之后**。时间戳认不出时从宽（返回 True）。
+
+        宁可从宽也不能漏掉她真答的——真正挡旧内容的是下面那道"时间戳明显早于
+        本轮"的判定。
+        """
+        got = _yui_link.parse_ts(ts)
+        started = float(getattr(self, "_compat_round_started", 0.0) or 0.0)
+        if not got or not started:
+            return True
+        return got >= started - 3.0
+
+    def _compat_fresh_texts(self) -> list[tuple[str, str]]:
+        """从实时总线拿"本轮开始之后"她说的话（带时间戳过滤）。"""
+        bus = self._yui_bus()
+        if bus is None:
+            return []
+        try:
+            recs = bus.new_records()
+        except Exception:
+            return []
+        out: list[tuple[str, str]] = []
+        for rec in recs:
+            if self._compat_is_fresh(rec.get("ts")):
+                out.append((rec.get("text") or "", "实时总线"))
+        return out
 
     def _compat_all_new_texts(self, prog: dict) -> list[tuple[str, str]]:
         """**这一轮开始以来**她说的所有话（不只当前这一题），给"补收"用。"""
@@ -927,24 +958,55 @@ class AssessmentPlugin(NekoPluginBase):
         bus = self._yui_bus()
         if bus is not None:
             try:
-                out.extend((t, "实时总线") for t in bus.round_texts())
+                for rec in bus.round_records():
+                    if self._compat_is_fresh(rec.get("ts")):
+                        out.append((rec.get("text") or "", "实时总线"))
             except Exception:
                 pass
         start = prog.get("start") or {}
-        feed = self._yui_feed()
-        if feed is not None:
-            try:
-                out.extend((t, "对话流") for t in feed.new_her_turns(start.get("snap") or {}))
-            except Exception:
-                pass
         dlg = self._yui_dialog()
         if dlg is not None and dlg.available:
             try:
                 out.extend((row["text"], "对话库")
-                           for row in dlg.new_replies(int(start.get("mark") or 0)))
+                           for row in dlg.new_replies(int(start.get("mark") or 0))
+                           if self._compat_is_fresh(row.get("ts")))
             except Exception:
                 pass
         return [(t, c) for t, c in _dedupe_texts(out) if not self._compat_is_our_push(t)]
+
+    def _compat_log_poll(self, fresh: list[tuple[str, str]]) -> None:
+        """把"总线这一轮到底给了什么"记一笔（限速 ~12 秒一次）。
+
+        排查"她答了却读不到"时，这一行直接说明：她的新话到没到、什么时候到、
+        走的哪条通道。没有它就只能猜——前面几轮全是这么浪费掉的。
+        """
+        now = time.time()
+        if now - float(getattr(self, "_compat_poll_log_at", 0.0) or 0.0) < 12.0:
+            return
+        self._compat_poll_log_at = now
+        bus = self._yui_bus()
+        if bus is None:
+            self.logger.info("[assessment] 总线轮询：通道没建起来；新话 {} 条", len(fresh))
+            return
+        try:
+            recs = bus.records(40)
+        except Exception as exc:
+            self.logger.info("[assessment] 总线轮询失败：{}", exc)
+            return
+        by_space: dict[str, list[dict]] = {}
+        for rec in recs:
+            by_space.setdefault(rec.get("space") or "?", []).append(rec)
+        parts = []
+        for space, rows in list(by_space.items())[:4]:
+            last = rows[-1]
+            ts = _yui_link.parse_ts(last.get("ts"))
+            when = time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "无时间戳"
+            parts.append("%s×%d 末条(%s,%s)「%s」" % (
+                space, len(rows), last.get("kind") or last.get("role") or "?",
+                when, str(last.get("text") or "")[:24].replace("\n", " ")))
+        self.logger.info("[assessment] 总线轮询 → {}｜本轮新话 {} 条 {}",
+                         "；".join(parts) or "（空）", len(fresh),
+                         [t[:16] for t, _ in fresh[:2]])
 
     def _compat_await_one(self, question_id: str, index: int, total: int,
                           deadline: float) -> tuple[list[int], str, str]:
@@ -967,7 +1029,9 @@ class AssessmentPlugin(NekoPluginBase):
             stop = getattr(self, "_stop_event", None)
             if stop is not None and stop.is_set():
                 return [], last_text, last_channel
-            for text, channel in self._compat_new_texts(snap, mark):
+            fresh = self._compat_new_texts(snap, mark)
+            self._compat_log_poll(fresh)
+            for text, channel in fresh:
                 last_text, last_channel = text, channel
                 ref = _yui_link.referenced_question(text, int(total))
                 if ref and ref != int(index):
@@ -1295,6 +1359,7 @@ class AssessmentPlugin(NekoPluginBase):
             prog["status"] = "asking"
             prog["reason"] = ""
         # 回合起点游标：补收时要用它把「这一轮以来她说的所有话」捞全
+        self._compat_round_started = time.time()
         snap, mark = self._compat_cursors()
         prog["start"] = {"snap": snap, "mark": mark}
         prog["answered"] = sum(1 for it in prog["items"] if len(it.get("picks") or []) == 2)

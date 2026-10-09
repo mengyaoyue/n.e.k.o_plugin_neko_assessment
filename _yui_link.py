@@ -44,6 +44,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -456,6 +457,40 @@ def _record_to_dict(record: Any) -> dict:
     return {}
 
 
+# ── 时间戳：各种形态统一成 epoch 秒 ──────────────────────────
+def parse_ts(value: Any) -> float:
+    """把各种时间戳统一成 epoch 秒（本机时区）；认不出返回 0。
+
+    为什么非要有它：宿主的落盘是**懒触发**的，会把**几分钟前的旧对话**当成新内容
+    一次性刷出来（对话流尤其明显）。只有拿记录自己的时间戳和"本轮开始时刻"比，
+    才能把"迟到的旧回答"和"她刚说的话"分开——踩过：上一轮的回答被当成新一轮的
+    答案，面板上就是"跳题"。
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        got = float(value)
+        if got > 1e12:                      # 毫秒
+            got /= 1000.0
+        return got if got > 1e8 else 0.0
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    try:
+        return parse_ts(float(text))
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return time.mktime(time.strptime(text[:26], fmt))
+        except Exception:
+            continue
+    return 0.0
+
+
 # 用户侧的消息一律不算"她的回答"
 _USER_SIDE_TYPES = frozenset({
     "user_message", "user_text", "user", "voice_user_message", "asr_text",
@@ -522,6 +557,7 @@ class YuiBus:
         self.name = str(name or _DEFAULT_CHARACTER).strip() or _DEFAULT_CHARACTER
         self._seen: dict[str, None] = {}          # 当有序集合用
         self._round: list[str] = []               # 本轮开始以来收到的新话（给"补收"用）
+        self._round_records: list[dict] = []      # 同上，带 ts
         self._kinds: list[str] = []
         self._error = ""
         self._shapes: dict[str, str] = {}         # 命名空间 → 哪种调用形状管用
@@ -674,6 +710,7 @@ class YuiBus:
         同时清空本轮累积（新回合重新开始记）。
         """
         self._round = []
+        self._round_records = []
         for rec in self.records(limit):
             self._remember(rec["kind"] + "/" + rec["role"], rec["text"])
 
@@ -681,9 +718,9 @@ class YuiBus:
         """**本轮开始以来**收到过的她的话（``mark_seen()`` 之后累积）。"""
         return list(self._round)
 
-    def new_texts(self, limit: int = 40) -> list[str]:
-        """她新说的话（排除用户侧，按出现顺序）。"""
-        fresh: list[str] = []
+    def new_records(self, limit: int = 40) -> list[dict]:
+        """她新说的话（排除用户侧/推送类），**带 ts**，供调用方按时间过滤。"""
+        fresh: list[dict] = []
         for rec in self.records(limit):
             if rec["kind"].lower() in _PUSH_TYPES:
                 continue                    # 往对话里推的消息（含我们自己的题目）
@@ -698,8 +735,17 @@ class YuiBus:
             self._remember(bucket, rec["text"])
             self._kinds.append(bucket)
             self._round.append(rec["text"])
-            fresh.append(rec["text"])
+            self._round_records.append(rec)
+            fresh.append(rec)
         return fresh
+
+    def new_texts(self, limit: int = 40) -> list[str]:
+        """她新说的话（只有正文；要时间戳请用 ``new_records``）。"""
+        return [rec["text"] for rec in self.new_records(limit)]
+
+    def round_records(self) -> list[dict]:
+        """本轮开始以来收到过的她的记录（带 ts），给"补收"用。"""
+        return list(self._round_records)
 
     def stats(self) -> dict:
         info: dict[str, Any] = {

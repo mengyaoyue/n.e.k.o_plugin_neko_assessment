@@ -1554,7 +1554,7 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
         def round_texts(self):
             return list(self.round) + list(self.late)
 
-        def new_texts(self):
+        def new_texts(self, limit=40):
             out: list[str] = []
             while self.late:                    # 迟到的话随时可以变得可读
                 text = self.late.pop(0)
@@ -1568,6 +1568,18 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
                     self.round.append(reply)
                     out.append(reply)
             return out
+
+        def new_records(self, limit=40):
+            # 带上"刚刚"的时间戳——真实总线每条 conversation_turn 都带 ts，
+            # 调用方要靠它把迟到的旧内容挡掉
+            return [{"text": x, "ts": __import__("time").time(),
+                     "space": "conversations", "kind": "conversation_turn",
+                     "role": "assistant"} for x in self.new_texts()]
+
+        def round_records(self):
+            return [{"text": x, "ts": __import__("time").time(),
+                     "space": "conversations", "kind": "conversation_turn",
+                     "role": "assistant"} for x in self.round_texts()]
 
         def kinds(self, limit=20):
             return ["ai_message"]
@@ -1597,10 +1609,12 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
         _compat=compat.CompatStore(tmp_path / "compat.json"),
         _compat_job={}, _compat_reply={}, _compat_progress={},
         _compat_bus_cache=Bus(), _compat_feed=Feed(), _yui_mem=False,
+        _compat_round_started=0.0, _compat_pushed=set(),
         _stop_event=__import__("threading").Event(),
         _COMPAT_ASK_MAX_CHARS=cls._COMPAT_ASK_MAX_CHARS,
         _COMPAT_PER_Q_WAIT=0.05, _COMPAT_POLL_SECONDS=0.005,
         _COMPAT_GAP_SECONDS=0.02, _COMPAT_ROUND_WINDOW_SECONDS=0.25,
+        _COMPAT_USE_FEED_FOR_ANSWERS=False,
         _COMPAT_PROBE_WAIT=0.05,
         _COMPAT_HARVEST_SECONDS=0.05,
         _COMPAT_WATCH_POLL_SECONDS=0.005,
@@ -1620,7 +1634,8 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
                  "_compat_new_texts", "_compat_all_new_texts", "_compat_await_one",
                  "_compat_finish", "_compat_harvest", "_compat_harvest_worker",
                  "_compat_watch_worker", "_compat_interview", "_compat_start_round",
-                 "_compat_log_channels", "_compat_bus_surface", "_yui_stats"):
+                 "_compat_log_channels", "_compat_bus_surface", "_compat_log_poll",
+                 "_compat_fresh_texts", "_compat_is_fresh", "_yui_stats"):
         setattr(fake, name, types.MethodType(getattr(cls, name), fake))
     qids = [q["id"] for q in compat.QUESTIONS[:10]]
     return fake, pushed, qids
@@ -1761,6 +1776,54 @@ def test_interview_ignores_echoed_questions(tmp_path):
     entry = fake._compat.get(fake._compat_job["round_id"])
     assert entry["yui"] is None, "全是回显的题目，一题都不该算她答的"
     assert fake._compat_job["status"] == "no_answer", fake._compat_job
+
+
+def test_stale_flushed_turns_are_not_taken_as_answers(tmp_path):
+    """落盘懒触发会把**几分钟前的旧对话**一次性刷出来——靠记录自己的时间戳挡掉。
+
+    真实事故：新一轮开始时对话流把上一轮的回答当"新内容"吐出来，于是第 1 题被
+    填上一个旧答案，后面全乱（用户看到的就是"跳题"）。
+    """
+    cls = _plugin_cls()
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
+    now = __import__("time").time()
+    fake._compat_round_started = now
+    assert fake._compat_is_fresh(now + 1) is True
+    assert fake._compat_is_fresh(now - 300) is False, "几分钟前的旧内容不许当本轮回答"
+    assert fake._compat_is_fresh(None) is True, "时间戳认不出时从宽，宁可多收"
+    stamp = __import__("time").strftime("%Y-%m-%d %H:%M:%S",
+                                        __import__("time").localtime(now - 600))
+    assert fake._compat_is_fresh(stamp) is False, "字符串时间戳也要认"
+
+
+def test_dialog_feed_is_not_used_as_an_answer_source():
+    """对话流**没有时间戳**，会把迟到的旧对话当新的灌进来，所以不做答案来源。
+
+    它只留着在诊断里显示"连得上连不上"。答案来源：实时总线（带 ts）+ 对话库（带 ts）。
+    """
+    cls = _plugin_cls()
+    assert cls._COMPAT_USE_FEED_FOR_ANSWERS is False
+
+
+def test_poll_digest_is_logged(tmp_path):
+    """每次轮询都要把"总线这一轮给了什么"写进日志。
+
+    前面几轮排查全靠猜（不知道她的话到没到、什么时候到、走的哪条通道），
+    这一行证据能省掉一整轮往返。
+    """
+    cls = _plugin_cls()
+    lines: list[str] = []
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=["1 2"])
+    fake.logger = types.SimpleNamespace(
+        warning=lambda *a, **k: None,
+        info=lambda *a, **k: lines.append(str(a)),
+        exception=lambda *a, **k: None)
+    fake._compat_log_poll([])
+    assert any("总线轮询" in x for x in lines), lines
+    # 限速：紧接着再来一次不该又写一行
+    n = len(lines)
+    fake._compat_log_poll([])
+    assert len(lines) == n, "轮询取证要限速，别刷屏"
 
 
 def test_interview_never_fabricates_when_she_stays_silent(tmp_path):
