@@ -1024,56 +1024,50 @@ def test_compat_store_state_machine(tmp_path):
 def test_api_compat_actions(tmp_path):
     cls = _plugin_cls()
 
+    asked = []
+
     class Fake:
         data_dir = tmp_path
         _compat = _load("_compat").CompatStore(tmp_path / "compat.json")
         _compat_job = {"status": "idle", "round_id": "", "source": ""}
-        _compat_memory = {}
-        written = []
+        _compat_reply = {}
+        _compat_since_ts = {}
 
         def _yui_stats(self):
-            return {"available": True, "facts": 3, "persona_sections": 3}
+            return {"available": True, "messages": 42}
 
-        def _compat_write_back(self, entry):   # 只记录调没调用，不碰真实记忆库
-            fresh = self._compat.get(entry["id"]) or {}
-            if fresh.get("remembered"):
-                return
-            if self._compat.mark_remembered(entry["id"]):
-                self.written.append(entry["id"])
+        def _compat_start_round(self, question_ids):
+            # 测试里不进程推给她：直接造一个"她已答完"的回合
+            rid = "r-test"
+            self._compat.start_round(rid, question_ids)
+            self._compat.set_yui(rid, {"own": [0] * len(question_ids),
+                                       "guess": [1] * len(question_ids)}, "herself")
+            self._compat_reply[rid] = {"text": '{"own": [...], "guess": [...]}', "ts": "2026-10-09 20:00:00"}
+            self._compat_job = {"status": "done", "round_id": rid, "source": "herself"}
+            return self._compat.get(rid)
 
-        def _compat_worker(self, round_id):   # 测试里不真跑 LLM：直接喂档案答案
-            entry = self._compat.get(round_id)
-            mod = _load("_compat")
-            self._compat.set_yui(round_id, mod.archive_answers(entry["question_ids"]), "archive")
+        def _compat_ask_again(self, rid):     # 只记录，不真的重问
+            asked.append(rid)
 
     fake = Fake()
     res = cls._api_compat(fake, {"action": "start"})
     assert res["ok"] and len(res["round"]["questions"]) == 10
+    assert "发给她" in res["note"], res["note"]
     rid = res["round"]["id"]
-    # start 在后台线程里喂 YUI 答案：等它落库（不设等待会有竞态，测试会偶发挂）
-    import time as _t
-
-    deadline = _t.time() + 5
-    while _t.time() < deadline:
-        if fake._compat.get(rid).get("yui"):
-            break
-        _t.sleep(0.02)
-    assert fake._compat.get(rid).get("yui"), "假 worker 没在时限内交卷"
     # 没交卷就揭晓 → waiting，且响应里不含任何答案
     res = cls._api_compat(fake, {"action": "reveal", "round_id": rid})
     assert res["ok"] and res["status"] == "waiting" and "result" not in res
-    # 交卷（此时 YUI 已由假 worker 填了档案答案）→ 立即可揭晓
+    assert res["yui_answered"] is True
+    # 交卷 → 立即可揭晓
     answers = [{"own": i % 4, "guess": (i + 1) % 4} for i in range(10)]
     res = cls._api_compat(fake, {"action": "submit", "round_id": rid, "answers": answers})
     assert res["ok"] and res["status"] == "ready"
     res = cls._api_compat(fake, {"action": "reveal", "round_id": rid})
     assert res["ok"] and res["status"] == "revealed"
-    assert res["yui_source"] == "archive" and res["result"]["total"] == 10
-    assert "yui_memory" in res
-    # 揭晓要触发一次「写回她的记忆」，且重复揭晓（面板是轮询的）不再触发
-    assert fake.written == [rid], fake.written
-    cls._api_compat(fake, {"action": "reveal", "round_id": rid})
-    assert fake.written == [rid], "重复揭晓不该重复回写"
+    # 来源必须是"她自己答的"，而且要把她的原话带出来
+    assert res["yui_source"] == "herself"
+    assert res["yui_reply"].get("text"), "得把她回的原话给面板看"
+    assert res["result"]["total"] == 10
     info_res = cls._api_compat(fake, {"action": "info"})
     assert info_res["memory"]["available"] is True
     assert len(res["result"]["rows"]) == 10
@@ -1084,31 +1078,22 @@ def test_api_compat_actions(tmp_path):
     assert cls._api_compat(fake, {"action": "reveal", "round_id": "nope"})["ok"] is False
 
 
-def test_compat_answer_parsing():
-    cls = _plugin_cls()
-    fake = type("F", (), {})()
-    good = '{"own": [0,1,2,3,0,1,2,3,0,1], "guess": [3,2,1,0,3,2,1,0,3,2]}'
-    parsed = cls._parse_compat_answers(fake, "先说两句废话" + chr(10) + good + chr(10) + "后话", 10)
-    assert parsed["own"][1] == 1 and parsed["guess"][0] == 3
-    for bad in ("没有 JSON", '{"own": [0,1], "guess": [0,1]}',
-                '{"own": [0]*10, "guess": [0]*10}', '{"own": [4]*10, "guess": [0]*10}'):
-        try:
-            cls._parse_compat_answers(fake, bad, 10)
-            raise AssertionError(f"应该拒绝：{bad[:24]}")
-        except (RuntimeError, ValueError, KeyError):
-            pass
-
-
 def test_panel_compat_tab_present():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-tab="compat"' in html and 'id="view-compat"' in html
     for probe in ('id="cm-start"', 'id="cm-opts-own"', 'id="cm-opts-guess"',
                   'id="cm-reveal"', 'id="cm-history"'):
         assert probe in html, probe
+    for probe in ('id="cm-yui-said"', 'id="cm-ask-again"', 'id="cfg-yui-dir"',
+                  'id="cm-yui-memory"'):
+        assert probe in html, probe
     script = html.split("<script>", 1)[1]
-    for probe in ("cmPollReveal", "你猜 YUI 会选", "action: 'reveal'", "离线档案",
-                  "净默契分", "随机水平", "和瞎猜一样"):
+    for probe in ("cmPollReveal", "你猜 YUI 会选", "action: 'reveal'",
+                  "action: 'ask_again'", "净默契分", "随机水平", "和瞎猜一样",
+                  "题目会发给她本人", "她在对话里回的原话", "读不到她的对话库"):
         assert probe in script or probe in html, probe
+    # 旧的"插件替她答/离线档案"那套必须彻底退场
+    assert "离线档案" not in script, "不该再有任何「插件替她答」的残留"
 
 
 # ── 面板 CSS 完整性（真实事故回归）─────────────────────────────
@@ -1209,148 +1194,155 @@ def test_pill_reports_real_connection_state():
     assert "connFirstFail" in html and "clearTimeout(connTimer)" in html
 
 
-# ── 猫娘记忆桥：她得真的在答题、也真的记得（用户报的问题）──────────
-_NULL_LOG = types.SimpleNamespace(warning=lambda *a, **k: None,
-                                  info=lambda *a, **k: None,
-                                  exception=lambda *a, **k: None)
+# ── 请她本人作答：把题目推给她，再把她的话读回来（用户报的问题）────
+def _fake_dialog_db(tmp_path, rows):
+    """造一个只有 time_indexed_original 的她的对话库。"""
+    import sqlite3
+    d = tmp_path / "YUI"
+    d.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(d / "time_indexed.db"))
+    conn.execute("create table time_indexed_original "
+                 "(id integer primary key autoincrement, session_id text, "
+                 "message text, timestamp text)")
+    for kind, text, ts in rows:
+        conn.execute("insert into time_indexed_original (session_id, message, timestamp) "
+                     "values (?,?,?)",
+                     ("s1", json.dumps({"type": kind, "data": {"content": [
+                         {"type": "text", "text": text}]}}, ensure_ascii=False), ts))
+    conn.commit()
+    conn.close()
+    return str(d)
 
 
-def _write_fake_memory(dirpath):
-    dirpath.mkdir(parents=True, exist_ok=True)
-    (dirpath / "persona.json").write_text(json.dumps({
-        "neko": {"facts": [{"text": "YUI 是住在主人电脑里的猫娘，爱吃小鱼干", "reinforcement": 5}]},
-        "master": {"facts": [{"text": "主人叫梦瑶月，是做插件的开发者", "reinforcement": 5}]},
-        "relationship": {"facts": [{"text": "YUI 每天早上会叫主人起床", "reinforcement": 5}]},
-    }, ensure_ascii=False), encoding="utf-8")
-    (dirpath / "facts.json").write_text(json.dumps([
-        {"text": "主人喜欢深夜写代码，经常忘记吃饭", "importance": 5},
-    ], ensure_ascii=False), encoding="utf-8")
-    return dirpath
+def test_yui_link_extracts_answers_from_her_words():
+    """她能回多行 JSON、带代码块、外面再套一层，都要能认出来。"""
+    link = _load("_yui_link")
+    cases = [
+        '{"own": [0,1,2,3], "guess": [3,2,1,0]}',
+        '答完啦喵：\n```json\n{"own": [0,1,2,3], "guess": [3,2,1,0]}\n```',
+        '{"result": {"own": [0,1,2,3], "guess": [3,2,1,0]}}',
+        '好呀喵～\n{\n  "own": [0, 1, 2, 3],\n  "guess": [3, 2, 1, 0]\n}\n答好了',
+    ]
+    for text in cases:
+        got = link._pick_answers(link._json_objects(text), want=4)
+        assert got == {"own": [0, 1, 2, 3], "guess": [3, 2, 1, 0]}, text
+    # 不合格的一律不认（宁可没有，也不能瞎解读）
+    for bad in ("我没有答案", '{"own": [0,1], "guess": [0,1]}',
+                '{"own": [9,9,9,9], "guess": [0,0,0,0]}', ''):
+        assert link._pick_answers(link._json_objects(bad), want=10) is None, bad
 
 
-def test_yui_memory_degrades_when_missing(tmp_path, monkeypatch):
-    """记忆库读不到时静默降级——她可以失忆，但不能让默契测试开不了局。"""
-    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", str(tmp_path / "nope"))
-    mem = _load("_yui_memory").YuiMemory()
-    assert mem.persona_block() == ""
-    assert mem.recall("随便问点什么", 3) == []
-    assert mem.recent_dialog(3) == []
-    block, info = mem.compat_context(["默契测试"])
-    assert block == "" and info["available"] is False
+def test_yui_link_reads_only_new_replies(tmp_path, monkeypatch):
+    link = _load("_yui_link")
+    path = _fake_dialog_db(tmp_path, [
+        ("human", "在吗", "2026-10-09 19:00:00.000000"),
+        ("ai", '{"own": [0,0,0,0], "guess": [1,1,1,1]}', "2026-10-09 19:05:00.000000"),
+        ("ai", "答好了喵～", "2026-10-09 19:06:00.000000"),
+    ])
+    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", path)
+    dlg = link.YuiDialog(path, "测试")
+    assert dlg.available and dlg.stats()["messages"] == 3
+    assert dlg.latest_ts() == "2026-10-09 19:06:00.000000"
+    # 起始点之后的才算她的回答
+    assert dlg.find_answers("2026-10-09 19:04:00", want=4) is not None
+    assert dlg.find_answers("2026-10-09 19:07:00", want=4) is None, "不能把旧话当成新回答"
+    got = dlg.find_answers("2026-10-09 19:04:00", want=4)
+    assert got["own"] == [0, 0, 0, 0] and got["reply"]
+    # 只覆盖那句普通聊天的窗口里，不能把闲聊当成答案
+    assert dlg.find_answers("2026-10-09 19:05:30", want=4) is None
 
 
-def test_yui_memory_reads_persona_and_reports_sources(tmp_path, monkeypatch):
-    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", str(_write_fake_memory(tmp_path / "YUI")))
-    mem = _load("_yui_memory").YuiMemory()
-    block, info = mem.compat_context(["默契测试 主人 喜欢"])
-    assert "小鱼干" in block and "梦瑶月" in block, block
-    assert info["available"] is True and info["persona"] > 0
-    st = mem.stats()
-    assert st["available"] is True and st["persona_sections"] == 3
+def test_yui_dir_is_never_hardcoded(tmp_path, monkeypatch):
+    """她的记忆位置因人而异，**源码里不许写死某个人的绝对路径**。"""
+    src = (ROOT / "_yui_link.py").read_text(encoding="utf-8")
+    assert "D:////neko" not in src and "D:/neko" not in src, "不许写死本机路径"
+    assert "NEKO_YUI_MEMORY_DIR" in src, "要留环境变量覆盖"
+    assert "memory_dir" in src, "要优先问宿主 config_manager"
+
+    # 找不到时必须如实说找不到，而不是猜一个路径硬用
+    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", "")
+    monkeypatch.delenv("NEKO_YUI_MEMORY_DIR", raising=False)
+    link = _load("_yui_link")
+    path, why = link.resolve_yui_dir("", [str(tmp_path)])
+    assert path == "" and why, (path, why)
 
 
-def _compat_fake_plugin(cls, chat):
-    """造一个只够跑 _compat_llm 的假插件（模型调用被替换成记录器）。"""
-    fake = types.SimpleNamespace(
-        _COMPAT_SYSTEM=cls._COMPAT_SYSTEM, _yui_mem=None, _compat_memory={},
-        _llm_chat=chat, logger=_NULL_LOG,
-    )
-    fake._yui = types.MethodType(cls._yui, fake)
-    fake._compat_memory_block = types.MethodType(cls._compat_memory_block, fake)
-    fake._parse_compat_answers = types.MethodType(cls._parse_compat_answers, fake)
-    return fake
-
-
-def test_compat_prompt_carries_persona_and_memory(tmp_path, monkeypatch):
-    """给模型的 prompt 必须真的带上她的人设和记忆。
-
-    原来只发「一句通用猫娘话术 + 10 道题」，所以 own 其实是模型随手挑的，
-    而且这一轮从没进过她的记忆——用户原话「bot 替猫娘随机选择了，
-    猫娘都不知道自己答题了」。
-    """
-    import asyncio
+def test_compat_ask_text_tells_her_what_to_do():
     cls = _plugin_cls()
-    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", str(_write_fake_memory(tmp_path / "YUI")))
-    seen = {}
-    good = '{"own": [0,1,2,3,0,1,2,3,0,1], "guess": [1,0,3,2,1,0,3,2,1,0]}'
-
-    async def chat(system, user, max_tokens=1024):
-        seen["system"], seen["user"] = system, user
-        return good
-
-    fake = _compat_fake_plugin(cls, chat)
     compat = _load("_compat")
     qids = [q["id"] for q in compat.QUESTIONS[:10]]
-    ans = asyncio.run(cls._compat_llm(fake, "r1", qids))
-    assert len(ans["own"]) == 10 and len(ans["guess"]) == 10
-    assert "小鱼干" in seen["system"], "prompt 里没有她的人设"
-    assert "梦瑶月" in seen["system"], "prompt 里没有关于主人的记忆"
-    assert "你本人" in seen["system"], "没告诉她 own 要按自己的性子选"
-    assert compat.question_public(qids[0])["text"] in seen["user"]
-    assert fake._compat_memory["r1"]["available"] is True
+    text = cls._compat_ask_text(None, qids)
+    for probe in ("你自己", "主人", "own", "guess", "JSON", "10 个数字"):
+        assert probe in text, probe
+    assert compat.question_public(qids[0])["text"] in text
 
 
-def test_compat_prompt_admits_when_memory_unreadable(tmp_path, monkeypatch):
-    """读不到记忆时必须明说，不许装作记得。"""
-    import asyncio
-    cls = _plugin_cls()
-    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", str(tmp_path / "missing"))
-    seen = {}
-
-    async def chat(system, user, max_tokens=1024):
-        seen["system"] = system
-        return '{"own": [0,0,0,0,0,0,0,0,0,0], "guess": [0,0,0,0,0,0,0,0,0,0]}'
-
-    fake = _compat_fake_plugin(cls, chat)
+def _watch_fake(cls, tmp_path, *, replies):
+    """搭一个只够跑 _compat_watch_worker 的假插件。"""
     compat = _load("_compat")
-    asyncio.run(cls._compat_llm(fake, "r1", [q["id"] for q in compat.QUESTIONS[:10]]))
-    assert "没读到你的记忆库" in seen["system"]
-    assert fake._compat_memory["r1"]["available"] is False
-
-
-def test_compat_write_back_writes_once(tmp_path):
-    """揭晓时把这一轮写回她的长期记忆；一轮只写一次。"""
-    cls = _plugin_cls()
-    compat = _load("_compat")
-    store = compat.CompatStore(tmp_path / "compat.json")
-    qids = [q["id"] for q in compat.QUESTIONS[:10]]
-    store.start_round("r1", qids)
-    store.set_self("r1", {"own": [0] * 10, "guess": [1] * 10})
-    store.set_yui("r1", {"own": [0] * 10, "guess": [0] * 10}, "llm")
-    store.reveal("r1")
-
     pushed = []
 
-    class Mem:
-        def push_experience(self, text):
-            pushed.append(text)
-            return True
+    class Dlg:
+        available = True
+        source = "测试"
 
-    fake = types.SimpleNamespace(_compat=store, _yui=lambda: Mem(), logger=_NULL_LOG)
-    fake._compat_write_back = types.MethodType(cls._compat_write_back, fake)
-    entry = store.get("r1")
-    fake._compat_write_back(entry)
-    fake._compat_write_back(entry)
-    assert len(pushed) == 1, "同一轮只该回写一次"
-    assert "默契测试" in pushed[0] and "默契分" in pushed[0]
-    assert store.get("r1")["remembered"] is True
+        def __init__(self, _p, _s=""):
+            pass
 
-    # 记忆库不可用时不许标记（等它能读了再补），也不许抛异常
-    store2 = compat.CompatStore(tmp_path / "b.json")
-    store2.start_round("r2", qids)
-    store2.set_self("r2", {"own": [0] * 10, "guess": [1] * 10})
-    store2.set_yui("r2", {"own": [0] * 10, "guess": [0] * 10}, "llm")
-    store2.reveal("r2")
-    fake2 = types.SimpleNamespace(_compat=store2, _yui=lambda: None, logger=_NULL_LOG)
-    fake2._compat_write_back = types.MethodType(cls._compat_write_back, fake2)
-    fake2._compat_write_back(store2.get("r2"))
-    assert store2.get("r2")["remembered"] is False
+        def latest_ts(self):
+            return "2026-10-09 19:00:00.000000"
+
+        def find_answers(self, since, want=0):
+            return replies.pop(0) if replies else None
+
+    fake = types.SimpleNamespace(
+        _compat=compat.CompatStore(tmp_path / "compat.json"),
+        _compat_job={}, _compat_reply={}, _compat_since_ts={},
+        _yui_mem=True, _stop_event=__import__("threading").Event(),
+        _COMPAT_WAIT_SECONDS=0.3, _COMPAT_POLL_SECONDS=0.02,
+        logger=types.SimpleNamespace(warning=lambda *a, **k: None,
+                                     info=lambda *a, **k: None,
+                                     exception=lambda *a, **k: None),
+    )
+    fake._yui_dialog = lambda: Dlg("", "")
+    fake._compat_push_now = lambda qids: pushed.append(list(qids))
+    fake._compat_since = types.MethodType(cls._compat_since, fake)
+    fake._compat_watch_worker = types.MethodType(cls._compat_watch_worker, fake)
+    qids = [q["id"] for q in compat.QUESTIONS[:10]]
+    fake._compat.start_round("r1", qids)
+    return fake, pushed, qids
 
 
-def test_panel_shows_what_she_used():
-    """面板必须如实写出她答题时参考了什么，读不到就要警告。"""
+def test_watch_worker_takes_her_words_as_the_answer(tmp_path):
+    cls = _plugin_cls()
+    good = {"own": [1] * 10, "guess": [2] * 10, "reply": '{"own": [...], "guess": [...]}',
+            "ts": "2026-10-09 19:10:00.000000"}
+    fake, pushed, qids = _watch_fake(cls, tmp_path, replies=[None, good])
+    fake._compat_watch_worker("r1")
+    assert pushed and len(pushed[0]) == 10, "必须真的把题目推给她"
+    entry = fake._compat.get("r1")
+    assert entry["yui"]["own"] == [1] * 10
+    assert entry["yui_source"] == "herself", "来源要如实标成「她自己答的」"
+    assert fake._compat_reply["r1"]["text"] == good["reply"], "要留住她的原话"
+    assert fake._compat_job["status"] == "done"
+
+
+def test_watch_worker_never_fabricates_when_she_stays_silent(tmp_path):
+    """她没答就如实说等超时——**绝不许插件替她编一份答案**。"""
+    cls = _plugin_cls()
+    fake, pushed, qids = _watch_fake(cls, tmp_path, replies=[])
+    fake._compat_watch_worker("r1")
+    assert pushed, "题目还是要问出去的"
+    entry = fake._compat.get("r1")
+    assert entry["yui"] is None, "不许伪造答案"
+    assert entry["status"] == "answering"
+    assert fake._compat_job["status"] == "timeout"
+    assert "没等到" in fake._compat_job["reason"]
+
+
+def test_panel_shows_her_actual_words():
+    """揭晓页必须能显示她回的原话（这是"真的她在答"的唯一证据）。"""
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    assert 'id="cm-memory-box"' in html
-    for probe in ("她的依据", "她的记忆库已接上", "没读到她的记忆库",
-                  "她记得这一轮", "yui_memory"):
-        assert probe in html, probe
+    assert "她在对话里回的原话" in html
+    assert "yui_reply" in html
+    assert "再问她一次" in html

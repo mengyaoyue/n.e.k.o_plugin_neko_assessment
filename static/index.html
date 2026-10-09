@@ -643,17 +643,25 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
           <h2>你和 YUI 的默契度</h2>
           <div class="muted" style="margin-bottom:11px">
             一轮 10 题，每题答两问：<b>你自己选什么</b>，再<b>猜 YUI 会选什么</b>。
-            你答题的同时她也在独立作答——她会读<b>自己的人设和关于你的记忆</b>来选，
-            不是随便挑一个。双方都交卷才同时揭晓，谁也偷看不了谁。题库 60 题全自写，结果只存本机。
             <br><br>
-            <b>她记得这一轮</b>：揭晓后这一轮会写回她的长期记忆，以后聊起来她是知道的。
+            <b>题目会发给她本人</b>：点开始后，题目会直接推进你们的对话，由她用自己的身份回答
+            （她的人设、记忆、上下文都是宿主给的，不经过本插件）；我们再把她回的那句话读回来。
+            所以答案是她自己下的，不是插件替她挑的——揭晓时会把她<b>回的原话</b>贴出来给你看。
+            <br><br>
+            她答完就自然记住了这件事（那就是她真实的对话）。双方都交卷才同时揭晓，谁也偷看不了谁。
+            题库 60 题全自写，结果只存本机。
             <br><br>
             <b>分数怎么算</b>：每题 4 个选项，所以三项指标瞎蒙各有 1/4 命中率，10 题的随机水平是
             <b>7.5 次</b>命中。默契分已经扣掉这条基线——<b>0 分 = 和瞎猜一样</b>，
             100 分 = 高出随机水平 2.5 个标准差（很难出现）。所以 0 分很常见，
             它只说明"没超出随机"，不代表你们差。
           </div>
-          <div class="notice" id="cm-memory-box" style="margin-bottom:11px"></div>
+          <div class="notice" id="cm-yui-memory" style="margin-bottom:8px"></div>
+          <div class="row" style="margin-bottom:11px">
+            <input id="cfg-yui-dir" type="text" placeholder="她的记忆目录（留空 = 自动定位）" style="flex:1;min-width:220px">
+            <button class="ghost tiny" id="btn-save-yui-dir">保存</button>
+            <span class="status" id="st-yui-dir"></span>
+          </div>
           <div class="row">
             <button id="cm-start">🐾 开始一轮</button>
             <span class="status" id="st-compat"></span>
@@ -684,8 +692,11 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
         </div>
 
         <div class="card hidden" id="cm-wait">
-          <h2>交卷了</h2>
-          <div class="muted" id="cm-wait-text">YUI 正在作答…双方都交卷后自动揭晓。</div>
+          <h2>交卷了 <span class="muted" style="font-size:var(--fs-xs)">你已交卷，等她</span></h2>
+          <div class="muted" id="cm-wait-text">正在等她用自己的身份回答…</div>
+          <div class="row" style="margin-top:10px">
+            <button class="ghost tiny hidden" id="cm-ask-again">再问她一次</button>
+          </div>
         </div>
 
         <div class="card hidden" id="cm-reveal">
@@ -696,7 +707,7 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
             <div class="sum" id="cm-summary"></div>
           </div>
           <div class="stats" id="cm-stats"></div>
-          <div class="notice" id="cm-reveal-memory" style="margin-top:12px"></div>
+          <div id="cm-yui-said" class="notice" style="margin-top:12px"></div>
           <div class="hr"></div>
           <div id="cm-rows"></div>
           <div class="row" style="margin-top:12px">
@@ -3322,40 +3333,41 @@ RELAX = {
 // ── 默契测试（你和 YUI 的默契度）──────────────────────────────
 let CM_ROUND = null;       // {id, questions, answers:[{own,guess}|null]}
 let CM_POS = 0;
-let cmTimer = null;
 
 function cmStage(name){
-  ['intro', 'answer', 'wait', 'reveal'].forEach((n) => {
-    $('cm-' + n).classList.toggle('hidden', n !== name);
-  });
+  ['intro', 'answer', 'wait', 'reveal'].forEach((n) => $('cm-' + n).classList.toggle('hidden', n !== name));
+}
+
+function cmSetMemoryBox(res){
+  // 她的对话库定位 + 能不能读回她的回答。定位不到要如实说，并给出可手填的地方
+  const mem = (res && res.memory) || {};
+  const box = $('cm-yui-memory');
+  if (!box) return;
+  if (mem.available){
+    box.className = 'notice good';
+    box.innerHTML = `能读到她在对话里说的话（${esc(mem.source || '自动定位')}）：`
+      + `<b>${mem.messages || 0}</b> 条记录，最后一条 ${esc(mem.latest || '—')}。`
+      + `${mem.yui_dir ? '<br>路径：' + esc(mem.yui_dir) : ''}`;
+  } else {
+    box.className = 'notice bad';
+    box.textContent = `⚠ 读不到她的对话库（${mem.reason || '未定位到'}）——`
+      + `那样她答了题我们也读不回来。可以在下面手填她的记忆目录。`;
+  }
+  const input = $('cfg-yui-dir');
+  if (input && !input.value) input.value = (res && res.yui_memory_dir) || '';
 }
 
 function cmLoadHistory(){
   api('/api/compat', {action: 'info'}).then((res) => {
     if (!res || res.ok === false) return;
-    const mem = res.memory || {};
-    const box = $('cm-memory-box');
-    if (box){
-      if (mem.available){
-        box.className = 'notice good';
-        box.innerHTML = `她的记忆库已接上：<b>${mem.facts || 0} 条</b>长期事实、`
-          + `人设 <b>${mem.persona_sections || 0}</b> 段、`
-          + `${mem.db_exists ? '对话库可读' : '对话库缺失'}`
-          + `${mem.yui_dir ? '（' + esc(mem.yui_dir) + '）' : ''}。她答题时用的就是这些。`;
-      } else {
-        box.className = 'notice bad';
-        box.textContent = `⚠ 读不到她的记忆库（${mem.reason || '路径不存在'}）——`
-          + `那样她的答案只是通用猫娘话术，不算她本人想的。`;
-      }
-    }
+    cmSetMemoryBox(res);
     const hist = res.history || [];
     $('cm-history').innerHTML = hist.length ? hist.map((h) => {
       const d = new Date((h.ts || 0) * 1000);
       const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-      const arch = h.yui_source === 'archive' ? ' · 离线档案' : '';
       return `<div class="link"><b>${h.score} 分</b>
         <span>${esc(h.band || '')}｜一致 ${h.same} · 你猜中 ${h.self_hit} · 她猜中 ${h.yui_hit}
-        （共 ${h.total} 题，随机水平命中 ${h.chance_hits}）　${when}${arch}</span></div>`;
+        （共 ${h.total} 题，随机水平命中 ${h.chance_hits}）　${when}</span></div>`;
     }).join('') : '<div class="muted">还没有玩过，来一轮？</div>';
   }).catch(() => {});
 }
@@ -3370,13 +3382,14 @@ async function cmStart(){
     if (!res.ok){ st.textContent = res.error || '开局失败'; st.style.color = 'var(--bad)'; return; }
     CM_ROUND = {
       id: res.round.id,
-      questions: res.round.questions,
-      answers: res.round.questions.map(() => null),
+      questions: res.round.questions || [],
+      answers: new Array((res.round.questions || []).length).fill(null),
     };
     CM_POS = 0;
-    st.textContent = '';
     cmRenderQ();
     cmStage('answer');
+    st.textContent = '';
+    floatText('题目已发给她喵', {x: window.innerWidth / 2, y: 120});
   } catch (err){ st.textContent = String(err); st.style.color = 'var(--bad)'; }
 }
 
@@ -3434,10 +3447,22 @@ async function cmSubmit(){
   try {
     const res = await api('/api/compat', {action: 'submit', round_id: CM_ROUND.id, answers: CM_ROUND.answers});
     if (!res.ok){ $('cm-wait-text').textContent = res.error || '提交失败'; return; }
-    $('cm-wait-text').textContent = 'YUI 正在作答…双方都交卷后自动揭晓。';
     cmTimer = setInterval(cmPollReveal, 1500);
     cmPollReveal();
   } catch (err){ $('cm-wait-text').textContent = String(err); }
+}
+
+function cmWaitText(job, answered){
+  const j = job || {};
+  if (answered) return '她答完了，正在对答案…';
+  switch (j.status){
+    case 'asking':      return '题目已经发给她了，正在等她用自己的身份回答…（她会在对话里说话）';
+    case 'timeout':     return `等了很久她还没答上来（${j.reason || ''}）。可以点下面「再问她一次」。`;
+    case 'no_dialog':   return `读不到她的对话库，所以她答了也读不回来（${j.reason || ''}）。`;
+    case 'push_failed': return `题目没推给她：${j.reason || ''}`;
+    case 'error':       return `出错了：${j.reason || ''}`;
+    default:            return '正在等她作答…';
+  }
 }
 
 async function cmPollReveal(){
@@ -3448,11 +3473,25 @@ async function cmPollReveal(){
       $('cm-wait-text').textContent = res.error || '揭晓失败';
       return;
     }
+    $('cm-wait-text').textContent = cmWaitText(res.job, res.yui_answered);
+    const stuck = res.job && ['timeout', 'no_dialog', 'push_failed', 'error'].includes(res.job.status);
+    $('cm-ask-again').classList.toggle('hidden', !stuck);
     if (res.status === 'waiting') return;      // 她还没交卷，下轮再问
     clearInterval(cmTimer); cmTimer = null;
     cmRenderReveal(res);
   } catch (err){ /* 下轮再试 */ }
 }
+
+$('cm-ask-again').onclick = async () => {
+  $('cm-wait-text').textContent = '再问她一次…';
+  $('cm-ask-again').classList.add('hidden');
+  try {
+    const res = await api('/api/compat', {action: 'ask_again', round_id: CM_ROUND.id});
+    if (!res.ok){ $('cm-wait-text').textContent = res.error || '重问失败'; return; }
+    if (!cmTimer) cmTimer = setInterval(cmPollReveal, 1500);
+    cmPollReveal();
+  } catch (err){ $('cm-wait-text').textContent = String(err); }
+};
 
 function cmRenderReveal(res){
   const r = res.result || {};
@@ -3460,26 +3499,19 @@ function cmRenderReveal(res){
   $('cm-summary').textContent =
     `${r.band}。合计命中 ${r.hits} 次（随机水平约 ${r.chance_hits} 次）——` +
     `选择一致 ${r.same} 题，你猜中她 ${r.self_hit} 题，她猜中你 ${r.yui_hit} 题。`;
-  $('cm-source').textContent = res.yui_source === 'archive'
-    ? 'YUI 离线档案作答（模型不在线，不是现场想的）'
-    : 'YUI 现场作答';
-  // 她答题时到底参考了什么：如实写出来。三态——有/没有/记录已丢，不许混成一句。
-  // 注意要写进**揭晓卡里**那个盒子：介绍页的 #cm-memory-box 这会儿是隐藏的。
-  const ym = res.yui_memory || {};
-  const memBox = $('cm-reveal-memory');
-  if (memBox){
-    if (ym.available === true){
-      memBox.className = 'notice good';
-      memBox.innerHTML = `她的依据：读到了自己的人设、<b>${ym.facts || 0} 条</b>`
-        + `关于你的记忆、<b>${ym.dialog || 0}</b> 句近期对话——所以这轮答案是她本人拿主意，不是随机挑的。`;
-    } else if (ym.available === false){
-      memBox.className = 'notice bad';
-      memBox.textContent = `⚠ 没读到她的记忆库（${ym.reason || '记忆文件不可读'}）——`
-        + `这一轮她只按通用猫娘话术作答，答案不能算"她本人想的"。`;
+  const mine = res.yui_source === 'herself';
+  $('cm-source').textContent = mine
+    ? 'YUI 本人作答（她收到的题目 + 她自己回的原话，见下）'
+    : (res.yui_source ? `来源：${res.yui_source}` : '来源未知');
+  const rep = res.yui_reply || {};
+  const box = $('cm-yui-said');
+  if (box){
+    if (rep.text){
+      box.className = 'tbubble';
+      box.textContent = `她在对话里回的原话（${esc(rep.ts || '')}）：\n${rep.text}`;
     } else {
-      memBox.className = 'notice';
-      memBox.textContent = `这一轮的作答记录不可用（${ym.reason || '未知原因'}）——`
-        + `没法确认她当时参考了什么，所以不做判断。`;
+      box.className = 'notice';
+      box.textContent = '没拿到她回的原话——这一轮的记录不在了，所以无法核实她当时是怎么说的。';
     }
   }
   $('cm-stats').innerHTML = `
@@ -3508,6 +3540,14 @@ function cmRenderReveal(res){
   cmStage('reveal');
 }
 
+$('btn-save-yui-dir').onclick = async () => {
+  busy($('st-yui-dir'), '保存中…');
+  try {
+    const res = await api('/api/prefs', {yui_memory_dir: $('cfg-yui-dir').value.trim()});
+    cmSetMemoryBox({memory: res.memory, yui_memory_dir: res.yui_memory_dir});
+    statusOf($('st-yui-dir'), true, res.memory && res.memory.available ? '已保存并读到她的对话库' : '已保存，但仍读不到');
+  } catch (err){ statusOf($('st-yui-dir'), false, String(err)); }
+};
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => { if (tab.dataset.tab === 'compat') cmLoadHistory(); });
 });

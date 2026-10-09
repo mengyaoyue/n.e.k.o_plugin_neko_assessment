@@ -144,16 +144,6 @@ def sample_questions(count: int = ROUND_SIZE, rng: Optional[random.Random] = Non
     return [q["id"] for q in picked[:want]]
 
 
-def archive_answers(question_ids: list[str]) -> dict[str, list[int]]:
-    """YUI 离线档案答案：她档案里的自选 + 她对主人的档案猜测。"""
-    own: list[int] = []
-    guess: list[int] = []
-    for qid in question_ids:
-        q = QUESTION_BY_ID.get(str(qid))
-        own.append(int(q["own"]) if q else 0)
-        guess.append(int(q["guess"]) if q else 0)
-    return {"own": own, "guess": guess}
-
 
 def validate_answers(question_ids: list[str], answers: Any) -> Optional[dict[str, list[int]]]:
     """校验用户提交：长度对齐、每题 own/guess 都是合法选项序号。不合法返回 None。"""
@@ -401,7 +391,6 @@ __all__ = [
     "ROUND_SIZE",
     "SCORE_BANDS",
     "CompatStore",
-    "archive_answers",
     "band_of",
     "chance_hits",
     "classify_round",
