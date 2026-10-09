@@ -969,6 +969,12 @@ class AssessmentPlugin(NekoPluginBase):
                 return [], last_text, last_channel
             for text, channel in self._compat_new_texts(snap, mark):
                 last_text, last_channel = text, channel
+                ref = _yui_link.referenced_question(text, int(total))
+                if ref and ref != int(index):
+                    # 她在答**别的题**（上一轮没答完的尾巴，或者一口气答了好几题）。
+                    # 这条交给"补收"按编号认领，绝不能塞给当前这一题——踩过：
+                    # 她答 8/9/10 的那条被塞进第 3 题，面板上看着就是"跳题"。
+                    continue
                 picks = _yui_link.parse_picks(text, n_options, 2, options)
                 if picks:
                     return picks, text, channel
@@ -1006,22 +1012,41 @@ class AssessmentPlugin(NekoPluginBase):
             cands = self._compat_all_new_texts(prog)
             used = {it.get("raw") for it in items if it.get("raw")}
             filled_now = 0
+
+            def options_of(idx: int) -> list[str]:
+                pub = _compat.question_public(qids[idx]) or {}
+                return [str(o) for o in (pub.get("options") or [])]
+
+            def assign(idx: int, text: str, channel: str) -> None:
+                picks = _yui_link.parse_picks(text, max(2, len(options_of(idx))), 2,
+                                              options_of(idx))
+                if not picks:
+                    return False
+                items[idx].update({"state": "ok", "picks": picks, "raw": text,
+                                   "channel": "%s·补收" % channel})
+                used.add(text)
+                return True
+
+            # ① 先按她自己写的题号认领（「8/10: …」「第4题…」）——一条消息答了几题
+            #    时，只有按编号才放得对位置。
+            for text, channel in cands:
+                if text in used or len(text) > 400:
+                    continue
+                ref = _yui_link.referenced_question(text, len(qids))
+                idx = ref - 1 if ref else -1
+                if 0 <= idx < len(items) and not items[idx].get("picks"):
+                    if assign(idx, text, channel):
+                        filled_now += 1
+            # ② 没写题号的，按顺序补给还没答上的题
             for i, item in enumerate(items):
                 if item.get("picks") or i >= len(qids):
                     continue
-                pub = _compat.question_public(qids[i]) or {}
-                options = [str(o) for o in (pub.get("options") or [])]
                 for text, channel in cands:
                     if text in used:
                         continue
-                    picks = _yui_link.parse_picks(text, max(2, len(options)), 2, options)
-                    if not picks:
-                        continue
-                    item.update({"state": "ok", "picks": picks, "raw": text,
-                                 "channel": "%s·补收" % channel})
-                    used.add(text)
-                    filled_now += 1
-                    break
+                    if assign(i, text, channel):
+                        filled_now += 1
+                        break
             cont = prog.setdefault("candidates", [])
             cont[:] = [t for t, _ in cands][:20]
             total += filled_now

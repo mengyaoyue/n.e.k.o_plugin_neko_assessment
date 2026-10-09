@@ -1804,6 +1804,50 @@ def test_unanswered_questions_are_not_called_missing_while_watching(tmp_path):
     fake._stop_event.set()                        # 收工，别让线程挂着
 
 
+def test_numbered_reply_is_bound_to_its_own_question(tmp_path):
+    """她一条消息答了好几题时，**按她写的题号认领**，不许按顺序乱塞。
+
+    真实事故：她答「8/10、9/10、10/10」的那条被塞进了新一轮的第 3 题，
+    面板上看就是"跳题"。
+    """
+    cls = _plugin_cls()
+    compat = _load("_compat")
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
+    fake._compat.start_round("r1", qids)
+    prog = {
+        "round_id": "r1", "total": len(qids), "index": len(qids), "status": "asking",
+        "answered": 0, "reason": "",
+        "items": [{"i": i + 1, "qid": q, "state": "waiting"} for i, q in enumerate(qids)],
+    }
+    fake._compat_progress["r1"] = prog
+    fake._compat.set_self("r1", {"own": [0] * 10, "guess": [1] * 10})
+    fake._compat_bus_cache.late = ["8/10: ①2，可以随时找你。②猜你选1，随叫随到。"]
+
+    got = fake._compat_harvest("r1", 0.0)
+    assert got["filled"] == 1, got
+    # 必须落到第 8 题，不是第 1 题
+    assert prog["items"][7].get("picks"), prog["items"][7]
+    assert not prog["items"][0].get("picks"), "不许按顺序塞给第 1 题"
+    assert "补收" in prog["items"][7]["channel"]
+
+
+def test_await_skips_reply_that_answers_another_question(tmp_path):
+    """等第 3 题时，她回的是第 8 题——**不能当第 3 题的答案**。"""
+    cls = _plugin_cls()
+    compat = _load("_compat")
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
+    fake._compat.start_round("r1", qids)
+    qid = qids[2]
+    # 总线里马上出现一条"答第 8 题"的话
+    fake._compat_bus_cache.late = ["8/10: ①2，可以随时找你。②猜你选1，随叫随到。"]
+    picks, raw, _ = fake._compat_await_one(qid, 3, 10, __import__("time").time() + 0.05)
+    assert picks == [], (picks, raw)
+    # 换成真正答第 3 题的话就该收下
+    fake._compat_bus_cache.late = ["3/10: ①4，好好说话。②猜你选1，先抱一下。"]
+    picks2, raw2, _ = fake._compat_await_one(qid, 3, 10, __import__("time").time() + 0.3)
+    assert picks2, raw2
+
+
 def test_harvest_gets_back_answers_that_landed_late(tmp_path):
     """她的回答晚一步才可读时，「补收」要能把它们按顺序补回没答上的题。
 

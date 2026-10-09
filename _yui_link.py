@@ -909,6 +909,34 @@ def _letter_picks(line: str, n_options: int) -> list[int]:
     return [i for i in out if i < n_options]
 
 
+
+
+# ── 她这句话在说第几题 ────────────────────────────────────────
+_QREF_PAIR = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2})")
+_QREF_CN = re.compile(r"第\s*(\d{1,2})\s*题")
+
+
+def referenced_question(text: str, total: int = 10) -> int:
+    """她这句话在说第几题（**1-based**）；没说就返回 0。
+
+    实测她真会这么写：「8/10: ①②，可以随时找你。」「5/10到7/10也在前头」。
+    有编号就必须按编号认——否则一条同时答了好几题的消息会被按顺序塞给最早的
+    未答题（踩过：她答 8/9/10 的那条被塞到了第 3 题，面板上就是"跳题"的样子）。
+    """
+    body = _normalize_reply(text)
+    if not body.strip():
+        return 0
+    for match in _QREF_PAIR.finditer(body):
+        cur = int(match.group(1))
+        den = int(match.group(2))
+        if den in (0, int(total)) and 1 <= cur <= int(total):
+            return cur
+    match = _QREF_CN.search(body)
+    if match and 1 <= int(match.group(1)) <= int(total):
+        return int(match.group(1))
+    return 0
+
+
 def parse_picks(
     text: str,
     n_options: int,

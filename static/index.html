@@ -3594,8 +3594,12 @@ function cmRenderLive(progress, target){
       : '<b class="muted">待问</b>';
     const picks = (it.picks || []).map((n) => Number(n) + 1).join(' / ');
     const raw = (it.raw || '').trim();
+    // 标出**从哪条通道收到的**——实时总线是实时的，对话库/对话流要等落盘。
+    // 用户最关心的"是不是非要我说话才收得到"看这里就够了。
+    const src = esc(String(it.channel || ''));
     return `<div class="cml-row">
-      <div class="cml-h">第 ${i} 题 ${label}${picks ? `　解析成选项 ${esc(picks)}` : ''}</div>
+      <div class="cml-h">第 ${i} 题 ${label}${picks ? `　解析成选项 ${esc(picks)}` : ''}`
+        + (src ? `　<span class="muted">来源：${src}</span>` : '') + `</div>
       ${raw ? `<div class="cml-raw">她说：${esc(raw).replace(/\n/g, '<br>')}</div>`
             : (state === 'skipped' && it.reason ? `<div class="cml-raw muted">${esc(it.reason)}</div>` : '')}
     </div>`;
