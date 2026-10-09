@@ -3549,26 +3549,22 @@ function cmRenderNudge(progress, job){
       : '都收全了。';
     return;
   }
-  const p = progress || {};
-  if (p.adaptive){
-    // 读回通道没响应时不再"她答完才发下一题"，直接说清楚，别让人以为卡住
-    box.className = 'notice bad';
-    box.innerHTML = `读回通道一时没响应，所以先按 ${Math.round(Number((CM_LIMITS || {}).gap || 20))} 秒
-      一题把十道题发完，之后我会一直替她把答案收回来。`
-      + `<br><b>宿主的规矩是：它把这一轮写进对话记录才有得读，`
-      + `而它只在你说过话之后（或隔几分钟的空闲维护里）才写。</b>`
-      + `等急了就在对话框里回她一句（哪怕一个「嗯」），它会立刻落盘。`;
+  if (!missing){
+    box.className = 'notice good';
+    box.textContent = total
+      ? `她答上了 ${answered}/${total} 题，全都收下来了。`
+      : '都收全了。';
     return;
   }
+  // 规则说在最前面（用户定的）：题目发出后她说的第一条就是这一题的答案。
   box.className = 'notice';
-  const lim = CM_LIMITS || {};
-  const perQ = Math.round(Number(lim.per_q_wait || 300));
-  const windowMin = Math.round(Number(lim.round_window || 3600) / 60);
-  box.innerHTML = `她答过的我会自动收下来。每一题我都给她留了 <b>${perQ} 秒</b>
-    ——这段时间里不会判她没答上；整轮我一直盯 <b>${windowMin} 分钟</b>，你随时可以揭晓。
-    <br>宿主的规矩是：<b>它把这一轮写进对话记录才有得读，而它只在你说过话之后
-    （或隔几分钟的空闲维护里）才写</b>。等急了就<b>在对话框里回她一句</b>
-    （哪怕一个「嗯」），它会立刻落盘，面板马上把答案收下。`;
+  box.innerHTML = `规则：<b>题目发出去之后她说的第一条，就是这一题的答案</b>
+    ——我收到就往下发下一题。每题最多等 <b>${Math.round(Number((CM_LIMITS || {}).per_q_wait || 300))} 秒</b>。
+    <br>要是长时间没动静，多半是宿主把她的回答压在缓存里没落盘
+    （它只在你说过话之后、或隔几分钟的空闲维护里才写）。那就<b>在对话框里回她一句</b>
+    （哪怕一个「嗯」），它会立刻放出来，我马上把答案收下。
+    也可以点下面的「补收她的回答」。
+    ${progress && progress.adaptive ? '<br><b>注意：这一轮读回通道一时没响应，已改用快节奏把题发完，之后一直替她收。</b>' : ''}`;
 }
 
 function cmRenderLive(progress, target){

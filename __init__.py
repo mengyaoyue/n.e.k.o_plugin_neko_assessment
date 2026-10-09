@@ -137,9 +137,6 @@ class AssessmentPlugin(NekoPluginBase):
             self._stop_event = threading.Event()
             # 收到过多少次 chat 事件（只记前 40 条日志，用来判断能不能收到她的话）
             self._chat_events: int = 0
-            # 本轮开始的时刻（epoch）。**只认这之后产生的记录**——用记录自己的
-            # 时间戳比对，才能把"迟到的旧回答"和"她刚说的话"分开。
-            self._compat_round_started: float = 0.0
             # 我们自己推出去的原文。**它绝不能当成她的回答**——实时总线里
             # `MESSAGE_PUSH` 这一类就是我们自己的推送，踩过：面板把她答的题显示成
             # 我推的题目原文，「解析成选项 3/4」其实是从我题目的选项编号里抠的。
@@ -707,10 +704,12 @@ class AssessmentPlugin(NekoPluginBase):
     #    300 秒走（真正实现"她答完才发下一题"）；不通就退化成 ③ 的快节奏，
     #    免得 300 秒 × 10 题 = 50 分钟白等。
     _COMPAT_PROBE_WAIT = 60.0
-    # 对话流**不做答案来源**：它没有时间戳，而宿主的落盘是懒触发的、会把几分钟前的
-    # 旧对话一次性刷出来。踩过：上一轮的回答被当成新一轮的答案（面板上就是"跳题"）。
-    # 留着它只是为了在诊断里显示"能不能连上"。
-    _COMPAT_USE_FEED_FOR_ANSWERS = False
+    # 实时总线（内存、不落盘）优先；它没给就退回对话流/对话库。
+    _COMPAT_USE_BUS_FOR_ANSWERS = True
+    # 对话流也是答案来源之一。规则很简单（用户定的）：
+    #   **题目发出去之后她说的第一条，就是这一题的答案。**
+    # 所以不挑通道、不比对时间戳、不看题号——哪条通道先把她那句话露出来就用哪条。
+    _COMPAT_USE_FEED_FOR_ANSWERS = True
     # ③ 退化成快节奏后，问下一题的间隔（只用来避免"连续推送攒成一条"）。
     _COMPAT_GAP_SECONDS = 20.0
     # ③ 整轮窗口：问完之后一直收到这里为止。落盘可能晚好几分钟，也可能要等
@@ -906,7 +905,7 @@ class AssessmentPlugin(NekoPluginBase):
     def _compat_new_texts(self, snap: dict, mark: int) -> list[tuple[str, str]]:
         """她相对游标新说的话：``[(原文, 通道)]``。**总线优先**，它不滞后。"""
         out: list[tuple[str, str]] = []
-        out = self._compat_fresh_texts()
+        out = self._compat_bus_texts() if self._COMPAT_USE_BUS_FOR_ANSWERS else []
         if not out and self._COMPAT_USE_FEED_FOR_ANSWERS:
             feed = self._yui_feed()
             if feed is not None:
@@ -918,27 +917,13 @@ class AssessmentPlugin(NekoPluginBase):
             dlg = self._yui_dialog()
             if dlg is not None and dlg.available:
                 try:
-                    out.extend((row["text"], "对话库")
-                               for row in dlg.new_replies(mark)
-                               if self._compat_is_fresh(row.get("ts")))
+                    out.extend((row["text"], "对话库") for row in dlg.new_replies(mark))
                 except Exception:
                     pass
         return [(t, c) for t, c in _dedupe_texts(out) if not self._compat_is_our_push(t)]
 
-    def _compat_is_fresh(self, ts: Any) -> bool:
-        """记录是否产生于**本轮开始之后**。时间戳认不出时从宽（返回 True）。
-
-        宁可从宽也不能漏掉她真答的——真正挡旧内容的是下面那道"时间戳明显早于
-        本轮"的判定。
-        """
-        got = _yui_link.parse_ts(ts)
-        started = float(getattr(self, "_compat_round_started", 0.0) or 0.0)
-        if not got or not started:
-            return True
-        return got >= started - 3.0
-
-    def _compat_fresh_texts(self) -> list[tuple[str, str]]:
-        """从实时总线拿"本轮开始之后"她说的话（带时间戳过滤）。"""
+    def _compat_bus_texts(self) -> list[tuple[str, str]]:
+        """从实时总线拿她新说的话（不带任何时间过滤）。"""
         bus = self._yui_bus()
         if bus is None:
             return []
@@ -946,11 +931,7 @@ class AssessmentPlugin(NekoPluginBase):
             recs = bus.new_records()
         except Exception:
             return []
-        out: list[tuple[str, str]] = []
-        for rec in recs:
-            if self._compat_is_fresh(rec.get("ts")):
-                out.append((rec.get("text") or "", "实时总线"))
-        return out
+        return [(rec.get("text") or "", "实时总线") for rec in recs]
 
     def _compat_all_new_texts(self, prog: dict) -> list[tuple[str, str]]:
         """**这一轮开始以来**她说的所有话（不只当前这一题），给"补收"用。"""
@@ -959,17 +940,23 @@ class AssessmentPlugin(NekoPluginBase):
         if bus is not None:
             try:
                 for rec in bus.round_records():
-                    if self._compat_is_fresh(rec.get("ts")):
-                        out.append((rec.get("text") or "", "实时总线"))
+                    out.append((rec.get("text") or "", "实时总线"))
             except Exception:
                 pass
         start = prog.get("start") or {}
+        if self._COMPAT_USE_FEED_FOR_ANSWERS:
+            feed = self._yui_feed()
+            if feed is not None:
+                try:
+                    out.extend((t, "对话流")
+                               for t in feed.new_her_turns(start.get("snap") or {}))
+                except Exception:
+                    pass
         dlg = self._yui_dialog()
         if dlg is not None and dlg.available:
             try:
                 out.extend((row["text"], "对话库")
-                           for row in dlg.new_replies(int(start.get("mark") or 0))
-                           if self._compat_is_fresh(row.get("ts")))
+                           for row in dlg.new_replies(int(start.get("mark") or 0)))
             except Exception:
                 pass
         return [(t, c) for t, c in _dedupe_texts(out) if not self._compat_is_our_push(t)]
@@ -1031,17 +1018,12 @@ class AssessmentPlugin(NekoPluginBase):
                 return [], last_text, last_channel
             fresh = self._compat_new_texts(snap, mark)
             self._compat_log_poll(fresh)
-            for text, channel in fresh:
-                last_text, last_channel = text, channel
-                ref = _yui_link.referenced_question(text, int(total))
-                if ref and ref != int(index):
-                    # 她在答**别的题**（上一轮没答完的尾巴，或者一口气答了好几题）。
-                    # 这条交给"补收"按编号认领，绝不能塞给当前这一题——踩过：
-                    # 她答 8/9/10 的那条被塞进第 3 题，面板上看着就是"跳题"。
-                    continue
+            if fresh:
+                # **规则（用户定的）：题目发出去之后她说的第一条，就是这一题的答案。**
+                # 不挑通道、不比时间戳、不看题号——只要是她说的、且是推题之后头一条。
+                text, channel = fresh[0]
                 picks = _yui_link.parse_picks(text, n_options, 2, options)
-                if picks:
-                    return picks, text, channel
+                return picks, text, channel
             if stop is not None:
                 stop.wait(self._COMPAT_POLL_SECONDS)
             else:
@@ -1359,7 +1341,6 @@ class AssessmentPlugin(NekoPluginBase):
             prog["status"] = "asking"
             prog["reason"] = ""
         # 回合起点游标：补收时要用它把「这一轮以来她说的所有话」捞全
-        self._compat_round_started = time.time()
         snap, mark = self._compat_cursors()
         prog["start"] = {"snap": snap, "mark": mark}
         prog["answered"] = sum(1 for it in prog["items"] if len(it.get("picks") or []) == 2)

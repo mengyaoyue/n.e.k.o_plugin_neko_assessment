@@ -1609,12 +1609,12 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
         _compat=compat.CompatStore(tmp_path / "compat.json"),
         _compat_job={}, _compat_reply={}, _compat_progress={},
         _compat_bus_cache=Bus(), _compat_feed=Feed(), _yui_mem=False,
-        _compat_round_started=0.0, _compat_pushed=set(),
+        _compat_pushed=set(),
         _stop_event=__import__("threading").Event(),
         _COMPAT_ASK_MAX_CHARS=cls._COMPAT_ASK_MAX_CHARS,
         _COMPAT_PER_Q_WAIT=0.05, _COMPAT_POLL_SECONDS=0.005,
         _COMPAT_GAP_SECONDS=0.02, _COMPAT_ROUND_WINDOW_SECONDS=0.25,
-        _COMPAT_USE_FEED_FOR_ANSWERS=False,
+        _COMPAT_USE_FEED_FOR_ANSWERS=True, _COMPAT_USE_BUS_FOR_ANSWERS=True,
         _COMPAT_PROBE_WAIT=0.05,
         _COMPAT_HARVEST_SECONDS=0.05,
         _COMPAT_WATCH_POLL_SECONDS=0.005,
@@ -1635,7 +1635,7 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
                  "_compat_finish", "_compat_harvest", "_compat_harvest_worker",
                  "_compat_watch_worker", "_compat_interview", "_compat_start_round",
                  "_compat_log_channels", "_compat_bus_surface", "_compat_log_poll",
-                 "_compat_fresh_texts", "_compat_is_fresh", "_yui_stats"):
+                 "_compat_bus_texts", "_yui_stats"):
         setattr(fake, name, types.MethodType(getattr(cls, name), fake))
     qids = [q["id"] for q in compat.QUESTIONS[:10]]
     return fake, pushed, qids
@@ -1778,52 +1778,47 @@ def test_interview_ignores_echoed_questions(tmp_path):
     assert fake._compat_job["status"] == "no_answer", fake._compat_job
 
 
-def test_stale_flushed_turns_are_not_taken_as_answers(tmp_path):
-    """落盘懒触发会把**几分钟前的旧对话**一次性刷出来——靠记录自己的时间戳挡掉。
+def test_first_reply_after_the_question_is_the_answer(tmp_path):
+    """**规则（用户定的）：题目发出去之后她说的第一条，就是这一题的答案。**
 
-    真实事故：新一轮开始时对话流把上一轮的回答当"新内容"吐出来，于是第 1 题被
-    填上一个旧答案，后面全乱（用户看到的就是"跳题"）。
+    不挑通道、不比时间戳、不看题号。她一口气说了好几句时，只认头一条。
     """
     cls = _plugin_cls()
     fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
-    now = __import__("time").time()
-    fake._compat_round_started = now
-    assert fake._compat_is_fresh(now + 1) is True
-    assert fake._compat_is_fresh(now - 300) is False, "几分钟前的旧内容不许当本轮回答"
-    assert fake._compat_is_fresh(None) is True, "时间戳认不出时从宽，宁可多收"
-    stamp = __import__("time").strftime("%Y-%m-%d %H:%M:%S",
-                                        __import__("time").localtime(now - 600))
-    assert fake._compat_is_fresh(stamp) is False, "字符串时间戳也要认"
+    fake._compat.start_round("r1", qids)
+    qid = qids[0]
+    # 总线里同时冒出三条她的话：第一条才算答案
+    fake._compat_bus_cache.late = [
+        "①3，看日落，吹海风不贴手。②猜你选4，捡贝壳。",
+        "下一句是闲聊，不该算答案。",
+        "①2 ②1",
+    ]
+    picks, raw, channel = fake._compat_await_one(qid, 1, 10,
+                                                __import__("time").time() + 0.3)
+    assert picks == [2, 3], (picks, raw)
+    assert raw.startswith("①3"), raw
+    assert channel == "实时总线", channel
 
 
-def test_dialog_feed_is_not_used_as_an_answer_source():
-    """对话流**没有时间戳**，会把迟到的旧对话当新的灌进来，所以不做答案来源。
+def test_first_reply_wins_even_if_it_mentions_another_number(tmp_path):
+    """她头一条里写了别的题号也照收——**"第一条就是答案"优先于任何编号判断**。
 
-    它只留着在诊断里显示"连得上连不上"。答案来源：实时总线（带 ts）+ 对话库（带 ts）。
+    上一版会因为"题号对不上"把这条丢掉、继续干等，用户看到的就是"卡住不动"。
     """
     cls = _plugin_cls()
-    assert cls._COMPAT_USE_FEED_FOR_ANSWERS is False
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
+    fake._compat.start_round("r1", qids)
+    fake._compat_bus_cache.late = ["8/10: ①2，可以随时找你。②猜你选1，随叫随到。"]
+    picks, raw, _ = fake._compat_await_one(qids[0], 1, 10,
+                                          __import__("time").time() + 0.3)
+    assert picks, raw
 
 
-def test_poll_digest_is_logged(tmp_path):
-    """每次轮询都要把"总线这一轮给了什么"写进日志。
-
-    前面几轮排查全靠猜（不知道她的话到没到、什么时候到、走的哪条通道），
-    这一行证据能省掉一整轮往返。
-    """
+def test_dialog_feed_is_still_a_valid_channel():
+    """对话流也是答案来源——它确实把她的话露出来过，不能关。"""
     cls = _plugin_cls()
-    lines: list[str] = []
-    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=["1 2"])
-    fake.logger = types.SimpleNamespace(
-        warning=lambda *a, **k: None,
-        info=lambda *a, **k: lines.append(str(a)),
-        exception=lambda *a, **k: None)
-    fake._compat_log_poll([])
-    assert any("总线轮询" in x for x in lines), lines
-    # 限速：紧接着再来一次不该又写一行
-    n = len(lines)
-    fake._compat_log_poll([])
-    assert len(lines) == n, "轮询取证要限速，别刷屏"
+    assert cls._COMPAT_USE_FEED_FOR_ANSWERS is True
+    assert cls._COMPAT_USE_BUS_FOR_ANSWERS is True
 
 
 def test_interview_never_fabricates_when_she_stays_silent(tmp_path):
@@ -1892,23 +1887,6 @@ def test_numbered_reply_is_bound_to_its_own_question(tmp_path):
     assert prog["items"][7].get("picks"), prog["items"][7]
     assert not prog["items"][0].get("picks"), "不许按顺序塞给第 1 题"
     assert "补收" in prog["items"][7]["channel"]
-
-
-def test_await_skips_reply_that_answers_another_question(tmp_path):
-    """等第 3 题时，她回的是第 8 题——**不能当第 3 题的答案**。"""
-    cls = _plugin_cls()
-    compat = _load("_compat")
-    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
-    fake._compat.start_round("r1", qids)
-    qid = qids[2]
-    # 总线里马上出现一条"答第 8 题"的话
-    fake._compat_bus_cache.late = ["8/10: ①2，可以随时找你。②猜你选1，随叫随到。"]
-    picks, raw, _ = fake._compat_await_one(qid, 3, 10, __import__("time").time() + 0.05)
-    assert picks == [], (picks, raw)
-    # 换成真正答第 3 题的话就该收下
-    fake._compat_bus_cache.late = ["3/10: ①4，好好说话。②猜你选1，先抱一下。"]
-    picks2, raw2, _ = fake._compat_await_one(qid, 3, 10, __import__("time").time() + 0.3)
-    assert picks2, raw2
 
 
 def test_harvest_gets_back_answers_that_landed_late(tmp_path):
@@ -2010,7 +1988,7 @@ def test_panel_shows_her_actual_words():
     assert 'id="cm-live"' in html and 'id="cm-live-reveal"' in html
     # 必须说清"只有你说话之后宿主才会把她的回答写进对话"——不然用户只会觉得又坏了
     assert 'id="cm-nudge"' in html and "cmRenderNudge" in html
-    assert "它只在你说过话之后" in html
+    assert "就是这一题的答案" in html
     assert "cmRenderLive" in html
     # 她没答上的题要显式标出来，不许混过去
     assert "没答上" in html and "未计分" in html
