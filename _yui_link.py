@@ -487,14 +487,21 @@ def _record_text(raw: dict) -> str:
 
 
 #: `get()` 的调用形状。挨个试，第一个能拿到东西的记下来（宿主没公开文档）。
+#: **优先带 timeout 的形状**——万一某个形状会把调用卡住，有超时至少不会冻住线程。
 _CALL_SHAPES: tuple[tuple[str, dict], ...] = (
+    ("messages", {"limit": 40, "timeout": 1.0}),
+    ("messages", {"max_count": 40, "timeout": 1.0}),
+    ("messages", {"timeout": 1.0}),
     ("messages", {"limit": 40}),
     ("messages", {"max_count": 40}),
     ("messages", {}),
+    ("conversations", {"limit": 40, "timeout": 1.0}),
+    ("conversations", {"max_count": 40, "timeout": 1.0}),
     ("conversations", {"limit": 40}),
     ("conversations", {"max_count": 40}),
-    ("conversations", {}),
+    ("events", {"limit": 40, "timeout": 1.0}),
     ("events", {"limit": 40}),
+    ("memory", {"limit": 40, "timeout": 1.0}),
     ("memory", {"limit": 40}),
 )
 

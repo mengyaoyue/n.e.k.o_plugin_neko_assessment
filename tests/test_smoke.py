@@ -1431,11 +1431,15 @@ def test_yui_bus_tries_several_call_shapes():
     """宿主的 `get` 参数名没有公开文档，所以要挨个试，第一个通的记下来。"""
     link = _load("_yui_link")
     rows = [{"type": "ai_message", "role": "assistant", "text": "1 2"}]
-    # 只接受 max_count（limit 那个形状会 TypeError）
+    # 只接受 max_count（带 limit / timeout 的形状都会 TypeError）
     bus = link.YuiBus(_bus_ctx_v2(rows, accepts=("max_count",)), "YUI")
     assert bus.available
     assert bus.new_texts() == ["1 2"], bus.error()
     assert "max_count" in bus.stats()["shape"], bus.stats()["shape"]
+    # 只接受 limit+timeout 时，第一个形状就该命中（带超时的排在最前）
+    bus3 = link.YuiBus(_bus_ctx_v2(rows, accepts=("limit", "timeout")), "YUI")
+    assert bus3.new_texts() == ["1 2"], bus3.error()
+    assert "timeout" in bus3.stats()["shape"], bus3.stats()["shape"]
 
 
 def test_yui_bus_tolerates_missing_sdk():
