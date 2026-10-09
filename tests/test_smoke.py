@@ -1346,3 +1346,22 @@ def test_panel_shows_her_actual_words():
     assert "她在对话里回的原话" in html
     assert "yui_reply" in html
     assert "再问她一次" in html
+
+
+def test_compat_panel_has_no_undeclared_state():
+    """默契那段 JS 里用到的状态变量必须真的有声明。
+
+    真实事故：重写这段时漏了一行 `let cmTimer = null;`。`node --check` 只查语法、
+    查不出未声明变量；而当时的探针全是**直接调函数**、从没点过「开始」——
+    结果用户点「开始一轮」一点反应都没有（第一行读 cmTimer 就抛 ReferenceError）。
+    所以：既要这个静态检查，也要有 _verify/_probe_compat_clickthrough.py 真点一遍。
+    """
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    script = html.split("<script>", 1)[1]
+    block = script[script.index("let CM_ROUND"):script.index("tab.dataset.tab === 'compat'")]
+    declared = set(re.findall(r"\b(?:let|const|var)\s+([A-Za-z_$][\w$]*)", script))
+    declared |= set(re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)", script))
+    used = set(re.findall(r"\b(?:cm[A-Z]\w*|CM_[A-Z_]\w*)\b", block))
+    missing = sorted(x for x in used if x not in declared)
+    assert not missing, "默契面板里用了没声明的变量：" + str(missing)
+    assert "let cmTimer" in script, "揭晓轮询的定时器必须声明"

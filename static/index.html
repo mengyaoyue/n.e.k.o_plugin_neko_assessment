@@ -3333,6 +3333,7 @@ RELAX = {
 // ── 默契测试（你和 YUI 的默契度）──────────────────────────────
 let CM_ROUND = null;       // {id, questions, answers:[{own,guess}|null]}
 let CM_POS = 0;
+let cmTimer = null;        // 揭晓轮询的定时器
 
 function cmStage(name){
   ['intro', 'answer', 'wait', 'reveal'].forEach((n) => $('cm-' + n).classList.toggle('hidden', n !== name));
