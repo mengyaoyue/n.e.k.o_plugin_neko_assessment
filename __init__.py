@@ -696,9 +696,11 @@ class AssessmentPlugin(NekoPluginBase):
     # ① 每题「还算在等她」的窗口：用户要求至少 300 秒。在这段时间内，面板不许
     #    把这一题写成"没答上"——她的回答可能只是还没落盘。
     _COMPAT_PER_Q_WAIT = 300.0
-    # ② 问下一题的间隔。**不能拿 ① 当间隔**：读不到她的实时回答，等待只会等满，
-    #    300 秒 × 10 题 = 50 分钟才问得完。20 秒既避免了"连续推送攒成一条"，
-    #    也让她来得及按顺序答。
+    # ② 读回通道通不通的**探针**：第一题只等这么久。通了之后每题就按 ① 给的
+    #    300 秒走（真正实现"她答完才发下一题"）；不通就退化成 ③ 的快节奏，
+    #    免得 300 秒 × 10 题 = 50 分钟白等。
+    _COMPAT_PROBE_WAIT = 60.0
+    # ③ 退化成快节奏后，问下一题的间隔（只用来避免"连续推送攒成一条"）。
     _COMPAT_GAP_SECONDS = 20.0
     # ③ 整轮窗口：问完之后一直收到这里为止。落盘可能晚好几分钟，也可能要等
     #    用户说句话才触发，所以给足一小时；期间面板随时可以揭晓。
@@ -1132,7 +1134,11 @@ class AssessmentPlugin(NekoPluginBase):
 
     def _compat_interview(self, round_id: str, question_ids: list[str],
                           only: list[int] | None = None) -> None:
-        """后台线程：一题一条地问，等她答完再问下一题。"""
+        """后台线程：**她答完这一题才发下一题**（用户要求的节奏）。
+
+        读回通道通的时候每题几秒就收到答案，10 题一两分钟走完；通道不通时第一题
+        就能探出来，随即退化成快节奏，不白等 50 分钟。
+        """
         try:
             prog = self._compat_progress.get(round_id)
             if not isinstance(prog, dict):
@@ -1140,6 +1146,8 @@ class AssessmentPlugin(NekoPluginBase):
             items = prog.get("items") or []
             total = len(question_ids)
             todo = list(range(total)) if not only else [i for i in only if 0 <= i < total]
+            reads_ok = 0
+            adaptive = bool(prog.get("adaptive"))
             for i in todo:
                 stop = getattr(self, "_stop_event", None)
                 if stop is not None and stop.is_set():
@@ -1154,12 +1162,16 @@ class AssessmentPlugin(NekoPluginBase):
                 item["state"] = "asking"
                 prog["index"] = i + 1
                 prog["status"] = "asking"
-                # 只等 _COMPAT_GAP_SECONDS 看她有没有当场接住；没接住就先问下一题。
-                # 这一题**不算没答上**——它还有 _COMPAT_PER_Q_WAIT 秒的窗口，
-                # 之后的盯梢线程会一直替它收。
+                if adaptive:
+                    wait = self._COMPAT_GAP_SECONDS
+                elif reads_ok == 0 and i == 0:
+                    wait = self._COMPAT_PROBE_WAIT     # 先短探一下读回通道通不通
+                else:
+                    wait = self._COMPAT_PER_Q_WAIT     # 通了就按用户要求给足 300 秒
                 picks, raw, channel = self._compat_await_one(
-                    qid, i + 1, total, time.time() + self._COMPAT_GAP_SECONDS)
+                    qid, i + 1, total, time.time() + wait)
                 if picks:
+                    reads_ok += 1
                     item["state"] = "ok"
                     item["picks"] = picks
                     prog["answered"] = int(prog.get("answered") or 0) + 1
@@ -1167,6 +1179,15 @@ class AssessmentPlugin(NekoPluginBase):
                     item["state"] = "waiting"
                     item["picks"] = []
                     item["reason"] = "还没读到她的回答（宿主落盘慢）"
+                    if i == 0 and reads_ok == 0 and not adaptive:
+                        # 第一题探不通 → 读回通道没响应。再按 300 秒一题等下去就是
+                        # 50 分钟白等，所以退化成"快节奏发完、之后一直替她收"。
+                        adaptive = True
+                        prog["adaptive"] = True
+                        prog["reason"] = ("读回通道一时没响应，先按 %d 秒间隔把题发完，"
+                                          "之后一直替她收" % int(self._COMPAT_GAP_SECONDS))
+                        self.logger.warning(
+                            "[assessment] 读回通道没响应，默契测试改用快节奏发题（{}）", round_id)
                 item["asked_at"] = time.time()
                 item["wait_seconds"] = self._COMPAT_PER_Q_WAIT
                 item["raw"] = raw
@@ -1300,13 +1321,17 @@ class AssessmentPlugin(NekoPluginBase):
                 db_info = "异常：%s" % exc
         self.logger.info("[assessment] 默契读回通道自查 → 实时总线：{}；对话流：{}；对话库：{}",
                          bus_info, feed_info, db_info)
-        self.logger.info("[assessment] ctx.bus 对象面：{}", self._compat_bus_surface())
+        try:
+            self.logger.info("[assessment] ctx.bus 门面：{}", _yui_link.bus_report(self.ctx))
+        except Exception as exc:
+            self.logger.warning("[assessment] 读 ctx.bus 门面失败：{}", exc)
 
     # ── 接口 ─────────────────────────────────────────────────
     def _compat_limits(self) -> dict:
         """三个时间刻度原样交给面板——用户最关心的就是"等多久"。"""
         return {
             "per_q_wait": self._COMPAT_PER_Q_WAIT,
+            "probe_wait": self._COMPAT_PROBE_WAIT,
             "gap": self._COMPAT_GAP_SECONDS,
             "round_window": self._COMPAT_ROUND_WINDOW_SECONDS,
         }

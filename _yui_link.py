@@ -39,6 +39,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -349,30 +350,123 @@ class YuiFeed:
         return info
 
 
-# ── 实时总线：`ctx.bus.memory.get_sync` ────────────────────────
-# 宿主官方插件（neko_warthunder）读「用户刚说了什么」用的就是这条：
-#   ctx.bus.memory.get_sync(<角色名>, limit=N, timeout=T)  → 一批记录
-# 每条记录是对象，`.raw` 是 dict（含 `type` / `text` / `_ts`），另有 `.timestamp`。
-# 它是**内存里的实时环形缓冲**，不走落盘，所以不受"懒快照"影响。
+# ── 实时总线：`ctx.bus`（SDK v2 门面）────────────────────────────
+# 宿主把插件事件总线包成 SDK v2 的门面。实测对象面（插件日志里那行"ctx.bus 对象面"）：
 #
-# ⚠ 记录里的 `type` 取值没法从宿主的编译产物里确证（二进制里能看到
-# `user_message` / `ai_message` / `on_ai_message` / `note_ai_message` 这些字面量，
-# 但取不到完整的类型枚举）。所以这里**不做白名单**：只排除明确的"用户侧/自己"类型，
-# 其余文本一律当候选交给解析器——解析器认不出就自然不算答案，不会误判。
+#   ctx.bus = SdkBusContext[conversations, events, frames, lifecycle, memory, messages]
+#     .messages      → SdkMessagesBus      → get(**kwargs) → SdkBusList[SdkBusMessageRecord]
+#     .events        → SdkEventsBus        → get(**kwargs)
+#     .lifecycle     → SdkLifecycleBus     → get(**kwargs)
+#     .conversations → SdkConversationsBus → get(**kwargs) / get_by_id(conversation_id, …)
+#     .memory        → SdkMemoryBus        → get(bucket_id=None, limit, timeout)
+#
+# `SdkBusList` 上还有 where / sort / limit / filter / size / watch(debounce_ms)
+# （`watch` 是订阅，返回 `SdkBusWatcher`）。记录类是 dataclass + slots，有
+# `.dump() -> dict`、`.raw`、`.key`、`.version`、`.from_raw()`。
+#
+# ⚠ **`get` 是 async 的**（SDK 里有 `SdkBusNamespace._call.<locals>._await_result`），
+# 所以要把它跑在一个事件循环里。这些数据在**内存**里，不落盘 → 不滞后。
+#
+# ⚠ `ctx.bus.memory` 只有 `get`，**没有 `get_sync`**（上一版就是栽在这儿：照抄
+# 官方插件 neko_warthunder 的 `ctx.bus.memory.get_sync` 得到一个"不可用"）。
+# 所以这里**不写死调用形状**：挨个试几种常见的，把成功的那种记下来供日志/面板自查。
+async def _noop() -> None:  # pragma: no cover - 只为让 asyncio 有得跑
+    return None
+
+
+def run_awaitable(value: Any) -> Any:
+    """把 awaitable 跑完（独立事件循环）；不是 awaitable 就原样返回。"""
+    if not hasattr(value, "__await__"):
+        return value
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(value)
+    finally:
+        try:
+            loop.close()
+        except Exception:
+            pass
+
+
+def _unwrap(value: Any) -> Any:
+    """剥掉 `Ok(value)` 之类的包装。"""
+    for attr in ("value", "result", "data"):
+        inner = getattr(value, attr, None)
+        if inner is not None and not isinstance(value, (list, tuple, dict, str)):
+            return inner
+    return value
+
+
+def _as_dicts(value: Any) -> list[dict]:
+    """把 `SdkBusList` / 列表 / 包装对象统一成 ``list[dict]``。"""
+    value = _unwrap(value)
+    dump = getattr(value, "dump", None)
+    if callable(dump):
+        try:
+            items = dump()
+        except Exception:
+            items = None
+        if isinstance(items, list):
+            return [dict(x) for x in items if isinstance(x, dict)]
+    try:
+        items = list(value)
+    except Exception:
+        return []
+    out: list[dict] = []
+    for item in items:
+        if isinstance(item, dict):
+            out.append(item)
+            continue
+        got = _record_to_dict(item)
+        if got:
+            out.append(got)
+    return out
+
+
+def _record_to_dict(record: Any) -> dict:
+    """一条记录 → dict。字段名不写死：dump / to_dict / raw / __dict__ / slots 挨个试。"""
+    for attr in ("dump", "to_dict", "as_dict"):
+        fn = getattr(record, attr, None)
+        if callable(fn):
+            try:
+                got = fn()
+            except Exception:
+                got = None
+            if isinstance(got, dict):
+                return got
+    raw = getattr(record, "raw", None)
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip().startswith("{"):
+        try:
+            got = json.loads(raw)
+            if isinstance(got, dict):
+                return got
+        except Exception:
+            pass
+    for attr in ("__dict__", "__slots__"):
+        got = getattr(record, attr, None)
+        if attr == "__slots__" and got:
+            got = {name: getattr(record, name, None) for name in got}
+        if isinstance(got, dict) and got:
+            return {
+                str(k): v for k, v in got.items()
+                if not str(k).startswith("_") and v is not None
+            }
+    return {}
+
+
+# 用户侧的消息一律不算"她的回答"
 _USER_SIDE_TYPES = frozenset({
     "user_message", "user_text", "user", "voice_user_message", "asr_text",
     "input_transcript", "text_user_message", "register_text_user_message",
 })
-# 明确的"她说的"类型，优先当答案候选
-_AI_SIDE_TYPES = (
-    "ai_message", "assistant_message", "lanlan_message", "ai_text",
-    "response", "reply", "chat_ai_message",
-)
+_USER_SIDE_ROLES = frozenset({"user", "human", "master", "主人"})
 
 
 def _record_text(raw: dict) -> str:
     """从一条总线记录里抠出文本。字段名不写死，挨个试常见的几个。"""
-    for key in ("text", "content", "message", "body", "visible_text"):
+    for key in ("text", "content", "message", "body", "visible_text", "speech"):
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -392,11 +486,24 @@ def _record_text(raw: dict) -> str:
     return ""
 
 
-class YuiBus:
-    """实时总线（拉取式）。**这是唯一不依赖落盘的通道。**
+#: `get()` 的调用形状。挨个试，第一个能拿到东西的记下来（宿主没公开文档）。
+_CALL_SHAPES: tuple[tuple[str, dict], ...] = (
+    ("messages", {"limit": 40}),
+    ("messages", {"max_count": 40}),
+    ("messages", {}),
+    ("conversations", {"limit": 40}),
+    ("conversations", {"max_count": 40}),
+    ("conversations", {}),
+    ("events", {"limit": 40}),
+    ("memory", {"limit": 40}),
+)
 
-    `get_sync` 每次返回最近 ``limit`` 条，所以靠"见过就不再要"去重；
-    开新回合时先 ``mark_seen()`` 把当前存量吃掉，之后拿到的就都是新的。
+
+class YuiBus:
+    """实时总线（**内存**，不落盘，所以不滞后）。**这是唯一的实时读回通道。**
+
+    每次 `get` 拿回最近一批记录，所以靠"见过就不再要"去重；开新回合先
+    ``mark_seen()`` 把存量吃掉，之后拿到的就都是新的。
     """
 
     _MAX_SEEN = 400
@@ -408,55 +515,80 @@ class YuiBus:
         self._round: list[str] = []               # 本轮开始以来收到的新话（给"补收"用）
         self._kinds: list[str] = []
         self._error = ""
+        self._shape = ""                          # 记下哪种调用形状管用
+        self._last_count = 0
 
-    def _get_sync(self) -> Any:
+    # ── 找命名空间 ───────────────────────────────────────────
+    def _space(self, attr: str) -> Any:
         bus = getattr(self.ctx, "bus", None)
-        memory = getattr(bus, "memory", None)
-        return getattr(memory, "get_sync", None)
+        return getattr(bus, attr, None) if bus is not None else None
 
     @property
     def available(self) -> bool:
-        return callable(self._get_sync())
+        bus = getattr(self.ctx, "bus", None)
+        if bus is None:
+            self._error = "ctx.bus 不存在"
+            return False
+        for attr in ("messages", "conversations", "events", "memory"):
+            space = self._space(attr)
+            if space is not None and callable(getattr(space, "get", None)):
+                return True
+        self._error = "ctx.bus 上没有可用的 get（属性：%s）" % ",".join(
+            sorted(n for n in dir(bus) if not n.startswith("_")))
+        return False
 
-    def records(self, limit: int = 30) -> list[dict]:
-        """最近的一批记录，归一化成 ``{kind, text, ts}``。失败返回空。"""
-        fn = self._get_sync()
-        if not callable(fn):
-            self._error = "ctx.bus.memory.get_sync 不可用"
-            return []
-        raw: Any = None
-        try:
-            raw = fn(self.name, limit=int(limit), timeout=0.4)
-        except TypeError:
-            try:
-                raw = fn(self.name, limit=int(limit))
-            except Exception as exc:
-                self._error = str(exc)
-                return []
-        except Exception as exc:
-            self._error = str(exc)
-            return []
-        out: list[dict] = []
-        for rec in list(raw or []):
-            payload = getattr(rec, "raw", rec)
-            if not isinstance(payload, dict):
+    def _fetch(self) -> list[dict]:
+        """按 _CALL_SHAPES 挨个试，返回第一份非空记录。"""
+        for attr, kwargs in _CALL_SHAPES:
+            space = self._space(attr)
+            fn = getattr(space, "get", None)
+            if not callable(fn):
                 continue
+            try:
+                got = run_awaitable(fn(**kwargs))
+            except TypeError:
+                continue                       # 这个形状不接受这些参数
+            except Exception as exc:
+                self._error = "%s.get(%s)：%s" % (attr, kwargs, exc)
+                continue
+            rows = _as_dicts(got)
+            if rows:
+                if not self._shape:
+                    self._shape = "%s.get(%s)" % (
+                        attr, ", ".join("%s=%r" % kv for kv in kwargs.items()) or "")
+                return rows
+        return []
+
+    # ── 对外 ────────────────────────────────────────────────
+    def records(self, limit: int = 40) -> list[dict]:
+        """最近的一批记录，归一化成 ``{kind, text, role, ts}``。失败返回空。"""
+        raw = self._fetch()
+        out: list[dict] = []
+        for payload in raw:
             text = _record_text(payload)
             if not text:
                 continue
-            kind = str(payload.get("type") or payload.get("kind") or "").strip()
             out.append({
-                "kind": kind,
+                "kind": str(payload.get("type") or payload.get("kind")
+                            or payload.get("event") or "").strip(),
+                "role": str(payload.get("role") or payload.get("speaker")
+                            or payload.get("sender") or "").strip(),
                 "text": text,
-                "ts": (getattr(rec, "timestamp", None)
-                       or payload.get("_ts") or payload.get("timestamp")),
+                "ts": (payload.get("timestamp") or payload.get("ts")
+                       or payload.get("created_at") or payload.get("_ts")),
             })
-        return out
+        self._last_count = len(out)
+        return out[-int(limit):] if limit else out
 
     def kinds(self, limit: int = 40) -> list[str]:
-        """看到过哪些 ``type``。面板/日志用它自查"总线到底给了什么"。"""
-        seen = {r["kind"] for r in self.records(limit)}
-        return sorted(k for k in seen if k)
+        """看到过哪些 ``type``/``role``。面板/日志用它自查"总线到底给了什么"。"""
+        seen = set()
+        for r in self._fetch()[-(int(limit) or 40):]:
+            for key in ("type", "kind", "event", "role", "speaker", "sender"):
+                value = str(r.get(key) or "").strip()
+                if value:
+                    seen.add(value)
+        return sorted(seen)
 
     def error(self) -> str:
         return self._error
@@ -475,24 +607,26 @@ class YuiBus:
         """
         self._round = []
         for rec in self.records(limit):
-            self._remember(rec["kind"], rec["text"])
+            self._remember(rec["kind"] + "/" + rec["role"], rec["text"])
 
     def round_texts(self) -> list[str]:
         """**本轮开始以来**收到过的她的话（``mark_seen()`` 之后累积）。"""
         return list(self._round)
 
     def new_texts(self, limit: int = 40) -> list[str]:
-        """她新说的话（排除用户侧类型，按出现顺序）。"""
+        """她新说的话（排除用户侧，按出现顺序）。"""
         fresh: list[str] = []
         for rec in self.records(limit):
-            kind = rec["kind"]
-            if kind in _USER_SIDE_TYPES:
+            if rec["kind"] in _USER_SIDE_TYPES:
                 continue
-            key = kind + "\x00" + rec["text"]
+            if rec["role"].lower() in _USER_SIDE_ROLES:
+                continue
+            bucket = rec["kind"] + "/" + rec["role"]
+            key = bucket + "\x00" + rec["text"]
             if key in self._seen:
                 continue
-            self._remember(kind, rec["text"])
-            self._kinds.append(kind)
+            self._remember(bucket, rec["text"])
+            self._kinds.append(bucket)
             self._round.append(rec["text"])
             fresh.append(rec["text"])
         return fresh
@@ -503,8 +637,8 @@ class YuiBus:
             "character": self.name,
             "seen": len(self._seen),
         }
-        if not self.available:
-            info["reason"] = self._error or "拿不到 ctx.bus.memory.get_sync"
+        if not info["available"]:
+            info["reason"] = self._error or "ctx.bus 上没有可用的 get"
             return info
         try:
             recs = self.records(40)
@@ -512,13 +646,49 @@ class YuiBus:
             info["reason"] = str(exc)
             return info
         info["records"] = len(recs)
-        info["kinds"] = sorted({r["kind"] for r in recs if r["kind"]})
-        # 明确标成"她说的话"的记录有几条——自查用，免得再靠猜
-        info["ai_typed"] = sum(1 for r in recs if r["kind"] in _AI_SIDE_TYPES)
-        info["sample"] = [
-            {"kind": r["kind"], "text": r["text"][:40]} for r in recs[-3:]
-        ]
+        info["shape"] = self._shape or "（还没试出可用形状）"
+        info["kinds"] = sorted({(r["kind"] + "/" + r["role"]).strip("/") for r in recs})
+        info["sample"] = [{"kind": r["kind"], "role": r["role"], "text": r["text"][:40]}
+                          for r in recs[-3:]]
         return info
+
+
+def bus_report(ctx: Any) -> str:
+    """把 `ctx.bus` 的门面摊开写进日志——宿主没有公开文档，这是唯一的自查手段。
+
+    把每个子命名空间的类名、成员名、`get` 的签名都列出来；下次遇到"读不到"，
+    看这一行就够了，不用再猜。
+    """
+    import inspect
+
+    def names(obj: Any) -> str:
+        try:
+            return ",".join(sorted(n for n in dir(obj) if not n.startswith("_"))[:26])
+        except Exception:
+            return "（读不出来）"
+
+    try:
+        bus = getattr(ctx, "bus", None)
+    except Exception as exc:
+        return "ctx.bus 读不到：%s" % exc
+    if bus is None:
+        return "ctx.bus 不存在"
+    parts = ["ctx.bus=%s[%s]" % (type(bus).__name__, names(bus))]
+    for attr in ("messages", "conversations", "events", "lifecycle", "memory"):
+        space = getattr(bus, attr, None)
+        if space is None:
+            parts.append("%s 无" % attr)
+            continue
+        sig = ""
+        fn = getattr(space, "get", None)
+        if callable(fn):
+            try:
+                sig = str(inspect.signature(fn))
+            except Exception:
+                sig = "(签名读不出)"
+        parts.append("%s=%s%s" % (attr, type(space).__name__, sig))
+    return "；".join(parts)
+
 
 
 # ── 她的对话库 ────────────────────────────────────────────────

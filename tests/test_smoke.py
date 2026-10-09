@@ -1036,7 +1036,8 @@ def test_api_compat_actions(tmp_path):
             return {"available": True, "messages": 42, "bus": {"available": True}}
 
         def _compat_limits(self):
-            return {"per_q_wait": 300.0, "gap": 20.0, "round_window": 3600.0}
+            return {"per_q_wait": 300.0, "probe_wait": 60.0, "gap": 20.0,
+                    "round_window": 3600.0}
 
         def _compat_start_round(self, question_ids, *, only=None, round_id=""):
             # 测试里不真的推给她：直接造一个"她已答完"的回合
@@ -1371,57 +1372,97 @@ def test_yui_feed_cursor_handles_repeated_replies():
     assert feed.new_her_turns({"count": 99, "tail": "查无此句"}) == []
 
 
-def _bus_ctx(rows):
-    """造一个只会返回给定记录的假 ctx.bus。"""
+def _bus_ctx_v2(rows, *, accepts=("limit",), space="messages"):
+    """造一个 **SDK v2 风格**的假 ctx.bus。
+
+    真实门面（插件日志实测）：`ctx.bus.messages.get(**kwargs)` → 异步 → `SdkBusList`，
+    记录有 `.dump()`。`accepts` 用来模拟"这个形状的参数名不对"。
+    """
     class Rec:
-        def __init__(self, kind, text, ts=1.0):
-            self.raw = {"type": kind, "text": text}
-            self.timestamp = ts
+        def __init__(self, payload):
+            self.raw = payload
 
-    class Mem:
-        def get_sync(self, name, limit=30, timeout=0.4):
-            return rows[-int(limit):]
+        def dump(self):
+            return dict(self.raw)
 
-    class Ctx:
-        def __init__(self):
-            self.bus = types.SimpleNamespace(memory=Mem())
-    return Ctx()
+    class BusList:
+        def __init__(self, items):
+            self._items = items
+
+        def dump(self):
+            return [dict(i) for i in self._items]
+
+        def __iter__(self):
+            return iter(self._items)
+
+    class Space:
+        def __init__(self, items):
+            self._items = items
+
+        async def get(self, **kwargs):
+            if set(kwargs) - set(accepts):
+                raise TypeError("unexpected kwargs: %s" % sorted(kwargs))
+            return BusList([Rec(p) for p in self._items])
+
+    return types.SimpleNamespace(bus=types.SimpleNamespace(**{space: Space(rows)}))
 
 
 def test_yui_bus_reads_real_time_and_skips_user_side():
-    """实时总线是唯一不滞后于落盘的通道。**用户那条不许混进来。**"""
+    """实时总线走内存、不落盘，是唯一不滞后的通道。**用户那条不许混进来。**"""
     link = _load("_yui_link")
-    R = lambda k, t: types.SimpleNamespace(raw={"type": k, "text": t}, timestamp=1.0)  # noqa: E731
-    rows = [R("user_message", "她答了吗"), R("ai_message", "本喵选1，猜主人2")]
-    bus = link.YuiBus(_bus_ctx(rows), "YUI")
-    assert bus.available
-    assert bus.kinds() == ["ai_message", "user_message"]
+    rows = [
+        {"type": "user_message", "role": "user", "text": "她答了吗"},
+        {"type": "ai_message", "role": "assistant", "text": "本喵选1，猜主人2"},
+    ]
+    bus = link.YuiBus(_bus_ctx_v2(rows), "YUI")
+    assert bus.available, bus.error()
+    assert "assistant" in bus.kinds() and "user" in bus.kinds()
     assert bus.new_texts() == ["本喵选1，猜主人2"], "不能把用户自己那条当成她的回答"
     assert bus.new_texts() == [], "见过一次就不该再要"
     assert bus.round_texts() == ["本喵选1，猜主人2"], "本轮累积供补收用"
     bus.mark_seen()
     assert bus.round_texts() == [], "开新一轮要把存量清掉"
-    rows.append(R("ai_message", "3 4"))
+    rows.append({"type": "ai_message", "role": "assistant", "text": "3 4"})
     assert bus.new_texts() == ["3 4"]
+    assert bus.stats()["shape"], "要记下哪种调用形状管用，方便日志自查"
+
+
+def test_yui_bus_tries_several_call_shapes():
+    """宿主的 `get` 参数名没有公开文档，所以要挨个试，第一个通的记下来。"""
+    link = _load("_yui_link")
+    rows = [{"type": "ai_message", "role": "assistant", "text": "1 2"}]
+    # 只接受 max_count（limit 那个形状会 TypeError）
+    bus = link.YuiBus(_bus_ctx_v2(rows, accepts=("max_count",)), "YUI")
+    assert bus.available
+    assert bus.new_texts() == ["1 2"], bus.error()
+    assert "max_count" in bus.stats()["shape"], bus.stats()["shape"]
 
 
 def test_yui_bus_tolerates_missing_sdk():
-    """拿不到 `get_sync` 时必须如实报"不可用"，绝不抛异常。"""
+    """拿不到可用门面时必须如实报"不可用"，绝不抛异常。
+
+    真实事故：照抄官方插件的 `ctx.bus.memory.get_sync`，而本机宿主的
+    `ctx.bus.memory` **只有 `get`**，于是整条通道静默失效。
+    """
     link = _load("_yui_link")
     bus = link.YuiBus(object(), "YUI")
     assert bus.available is False
     assert bus.new_texts() == [] and bus.round_texts() == []
     st = bus.stats()
     assert st["available"] is False and st["reason"], st
+    # 有 bus 但成员都不对，也要报清楚而不是炸
+    weird = types.SimpleNamespace(bus=types.SimpleNamespace(nothing=None))
+    bus2 = link.YuiBus(weird, "YUI")
+    assert bus2.available is False and "nothing" in bus2.error()
 
-    # 参数名对不上时退回只传名字，也不能炸
-    class Mem:
-        def get_sync(self, name, limit=30):
-            return []
 
-    ctx = types.SimpleNamespace(bus=types.SimpleNamespace(memory=Mem()))
-    bus2 = link.YuiBus(ctx, "YUI")
-    assert bus2.available and bus2.new_texts() == []
+def test_bus_report_lists_what_the_facade_exposes():
+    """门面自查：宿主没公开文档，"把对象摊开写进日志"是唯一可靠的自查手段。"""
+    link = _load("_yui_link")
+    ctx = _bus_ctx_v2([{"text": "x"}])
+    report = link.bus_report(ctx)
+    assert "ctx.bus=" in report and "messages=" in report
+    assert link.bus_report(object()) == "ctx.bus 不存在"
 
 
 def test_yui_bus_extracts_text_from_several_shapes():
@@ -1556,6 +1597,7 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
         _COMPAT_ASK_MAX_CHARS=cls._COMPAT_ASK_MAX_CHARS,
         _COMPAT_PER_Q_WAIT=0.05, _COMPAT_POLL_SECONDS=0.005,
         _COMPAT_GAP_SECONDS=0.02, _COMPAT_ROUND_WINDOW_SECONDS=0.25,
+        _COMPAT_PROBE_WAIT=0.05,
         _COMPAT_HARVEST_SECONDS=0.05,
         _COMPAT_WATCH_POLL_SECONDS=0.005,
         logger=types.SimpleNamespace(warning=lambda *a, **k: None,
@@ -1627,6 +1669,51 @@ def test_compat_time_scales_are_decoupled(tmp_path):
     assert cls._COMPAT_GAP_SECONDS <= 60.0, "间隔太大，10 题要问太久"
     assert cls._COMPAT_ROUND_WINDOW_SECONDS > cls._COMPAT_PER_Q_WAIT, "整轮窗口要更长"
     assert cls._COMPAT_ROUND_WINDOW_SECONDS >= 1800.0
+
+
+def test_interview_asks_next_question_only_after_her_answer(tmp_path):
+    """**她答完这一题才发下一题**——用户明确要求的节奏。
+
+    上一版把它做成"固定 20 秒间隔"，于是她还没答、用户甚至还没答完自己那份，
+    第二题就发出去了。用户原话：「我让你出题时，猫娘回答出答案后才出下一题」。
+    这里用「发送 / 读到」的事件序列把它钉死：必须严格交替。
+    """
+    cls = _plugin_cls()
+    fake, pushed, qids = _interview_fake(
+        cls, tmp_path, replies=[f"{i % 4 + 1} {(i + 1) % 4 + 1}" for i in range(10)])
+    events: list[str] = []
+    fake._compat_push_text = lambda text, desc: (pushed.append(text), events.append("push"))
+    inner = fake._compat_new_texts
+
+    def hooked(snap, mark):
+        out = inner(snap, mark)
+        if out:
+            events.append("read")
+        return out
+
+    fake._compat_new_texts = hooked
+    fake._compat_start_round(qids)
+    _wait_round(fake)
+    assert events == ["push", "read"] * 10, events
+    assert fake._compat_job["status"] == "done"
+
+
+def test_interview_falls_back_to_fast_pacing_when_channel_is_dead(tmp_path):
+    """读回通道不通时，第一题就能探出来，随即退化成快节奏——不白等 50 分钟。"""
+    cls = _plugin_cls()
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[None] * 10)
+    fake._COMPAT_PROBE_WAIT = 0.05
+    t0 = __import__("time").time()
+    fake._compat_start_round(qids)
+    _wait_round(fake)
+    prog = fake._compat_progress[fake._compat_job["round_id"]]
+    assert prog.get("adaptive") is True, prog
+    assert "读回通道" in (prog.get("reason") or "")
+    # 退化之后不再每题都等满 300 秒（测试里 300 被桩成 0.05，这里只看它确实走了快节奏）
+    assert len(pushed) == 10
+    assert __import__("time").time() - t0 < 5.0
+    # 没答上就如实标，绝不替她填
+    assert fake._compat.get(fake._compat_job["round_id"])["yui"] is None
 
 
 def test_interview_never_fabricates_when_she_stays_silent(tmp_path):
