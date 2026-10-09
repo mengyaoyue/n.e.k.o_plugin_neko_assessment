@@ -582,13 +582,20 @@ class YuiBus:
             sorted(n for n in dir(bus) if not n.startswith("_")))
         return False
 
-    def _fetch_space(self, attr: str) -> list[dict]:
-        """调某个命名空间，返回它给的记录（dict 列表）。失败返回空。"""
+    def _fetch_space(self, attr: str, limit: int | None = None) -> list[dict]:
+        """调某个命名空间，返回它给的记录（dict 列表）。失败返回空。
+
+        ``limit`` 会覆盖调用形状里的 ``limit``/``max_count``（宿主两种都认）。
+        """
         space = self._space(attr)
         fn = getattr(space, "get", None)
         if not callable(fn):
             return []
-        for kwargs in _CALL_SHAPES.get(attr, ({},)):
+        for base in _CALL_SHAPES.get(attr, ({},)):
+            kwargs = base
+            if limit:
+                kwargs = {k: (int(limit) if k in ("limit", "max_count") else v)
+                          for k, v in base.items()}
             try:
                 got = run_awaitable(fn(**kwargs))
             except TypeError:
@@ -604,7 +611,8 @@ class YuiBus:
                 return rows
         return []
 
-    def _fetch(self) -> list[dict]:
+
+    def _fetch(self, limit: int | None = None) -> list[dict]:
         """**合并所有命名空间**的记录，并标注来源。
 
         为什么不能"谁先有算谁"：`ctx.bus.messages` 实测只返回 `MESSAGE_PUSH`
@@ -612,18 +620,20 @@ class YuiBus:
         `conversations` 上。先撞上 messages 就返回，会把**我们自己的题目**当成
         她的回答——这个错真踩过：面板把她答的题显示成我推的题目原文，
         「解析成选项 3/4」其实是从我题目的选项编号里抠出来的。
+
+        :param limit: **每条通道各取这么多条**（不是合起来这么多，见 `records`）。
         """
         out: list[dict] = []
         for attr in _SPACE_ORDER:
-            rows = self._fetch_space(attr)
+            rows = self._fetch_space(attr, limit)
             for row in rows:
                 row = dict(row)
                 row["__space"] = attr
                 out.append(row)
-            if attr == "conversations":
-                # `conversations.get()` 多半只给"会话"本身。SDK 上还有
-                # `get_by_id(conversation_id, max_count, timeout)` 用来取会话里的
-                # 消息——她的回话很可能就在那儿，顺手拉一遍。
+            if attr == "conversations" and not rows:
+                # `conversations.get()` 只给"会话"、消息要用 id 再拉一层——
+                # 但这层调用一条要花到 1 秒、还可能要好几次，所以**只在主路
+                # 真的空手而归时**才走它（每次轮询都走会让整轮慢好几秒）。
                 for row in self._fetch_in_conversations(rows):
                     row["__space"] = "conversations.by_id"
                     out.append(row)
@@ -664,8 +674,20 @@ class YuiBus:
 
     # ── 对外 ────────────────────────────────────────────────
     def records(self, limit: int = 40) -> list[dict]:
-        """最近的一批记录，归一化成 ``{space, kind, role, text, ts}``。失败返回空。"""
-        raw = self._fetch()
+        """最近的一批记录，归一化成 ``{space, kind, role, text, ts}``。失败返回空。
+
+        🔴 **``limit`` 是"每条通道各取这么多"，不是"合起来这么多"。**
+        这里踩过一个把整条链路废掉的坑：老实现是 ``merged[-limit:]`` —— 取合并后
+        列表的**尾部** ``limit`` 条。而 `messages`（插件推送流）在 `_SPACE_ORDER`
+        里排在 `conversations` 后面，又**永远有 40 条带正文的记录**，于是切尾之后
+        `conversations` 的记录**一条都不剩**。日志里的铁证：轮询每次都打
+        ``总线轮询 → messages×40 末条(MESSAGE_PUSH,…)｜本轮新话 0 条 []``，
+        而同一秒的逐通道自查（不走 `records`）却能看到 ``conversations：40 条``。
+        ——她的回答一直都在总线上，只是被切掉了。
+
+        ⚠ 旧的 `_fetch()` 本身已经按 `limit` 逐通道截断了，这里**不能再切一刀**。
+        """
+        raw = self._fetch(limit)
         out: list[dict] = []
         for payload in raw:
             text = _record_text(payload)
@@ -682,12 +704,12 @@ class YuiBus:
                        or payload.get("created_at") or payload.get("_ts")),
             })
         self._last_count = len(out)
-        return out[-int(limit):] if limit else out
+        return out
 
     def kinds(self, limit: int = 40) -> list[str]:
         """看到过哪些 ``type``/``role``。面板/日志用它自查"总线到底给了什么"。"""
         seen = set()
-        for r in self._fetch()[-(int(limit) or 40):]:
+        for r in self._fetch(limit):
             for key in ("type", "kind", "event", "role", "speaker", "sender"):
                 value = str(r.get(key) or "").strip()
                 if value:
@@ -797,6 +819,10 @@ def bus_dump(ctx: Any, name: str = "") -> dict:
             "count": len(rows),
             "shape": bus._shapes.get(attr) or "（没试出可用形状）",
             "kinds": sorted({_kind(r) for r in rows}),
+            # 字段名和**最后一条的完整原样**都要：读回时"这条到底是谁说的话"靠
+            # `turn_type`/`source`/`lanlan_name` 这些字段判断，光看正文分不出来。
+            "fields": sorted(str(k) for k in rows[-1]) if rows else [],
+            "raw": {str(k): str(v)[:120] for k, v in (rows[-1].items() if rows else [])},
             "tail": [{"kind": _kind(r), "text": (_record_text(r) or "")[:90]}
                      for r in rows[-4:]],
         }

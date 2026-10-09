@@ -1299,6 +1299,66 @@ def test_single_pick_only_accepts_exactly_one_number():
     assert link.parse_picks("1 2", 4, 1) == [1]
 
 
+def test_records_never_drops_a_channel_when_total_exceeds_limit():
+    """🔴 真事故：`records()` 老实现取的是**合并列表的尾部** limit 条。
+
+    `messages`（插件推送流）在 `_SPACE_ORDER` 里排在 `conversations` 后面，又
+    **永远有 40 条带正文的记录**，于是 `merged[-40:]` 把 `conversations` 的记录
+    **一条都不剩地切掉**。日志里的铁证：轮询每一次都是
+    `总线轮询 → messages×40 末条(MESSAGE_PUSH,…)｜本轮新话 0 条 []`，
+    而同一秒的逐通道自查（不走 `records`）却看到 `conversations：40 条`。
+
+    ——她的回答一直在总线上，只是被这条切尾切掉了。
+    """
+    link = _load("_yui_link")
+
+    class Space:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def get(self, **_kw):
+            return list(self.rows)
+
+    class Bus:
+        def __init__(self):
+            # 40 条她的对话轮（含真实的两行回答）+ 40 条插件自己的推送流
+            self.conversations = Space([
+                {"type": "conversation_turn",
+                 "content": "①2，第%d题本喵这么选。\n②猜你选4。" % i,
+                 "timestamp": "2026-10-09 22:00:%02d" % (i % 60)}
+                for i in range(40)])
+            self.messages = Space([
+                {"type": "MESSAGE_PUSH",
+                 "content": "默契测试 %d/10：题目正文 1 甲 2 乙 3 丙 4 丁" % (i % 10 + 1),
+                 "timestamp": "2026-10-09 22:00:%02d" % (i % 60)}
+                for i in range(40)])
+            self.events = Space([])
+            self.lifecycle = Space([])
+            self.memory = Space([])
+
+    ctx = types.SimpleNamespace(bus=Bus())
+    bus = link.YuiBus(ctx, "YUI")
+
+    recs = bus.records(40)
+    spaces = {r["space"] for r in recs}
+    assert "conversations" in spaces, "她的对话轮**绝不能**被切掉"
+    assert any(r["text"].startswith("①2，第3题") for r in recs), "她的原话要在记录里"
+    # 也不能反过来把推送流切掉——两条通道各取各的
+    assert "messages" in spaces
+    # 每条通道各 40 条 → 合起来 80 条（不是"合起来 40 条"）
+    assert len(recs) == 80, len(recs)
+
+    # 真正要用的那一步：她的话必须能进 new_records
+    fresh = bus.new_texts(40)
+    assert any(t.startswith("①2，第0题") for t in fresh), fresh[:2]
+    assert not any("MESSAGE_PUSH" in t for t in fresh)
+    # 推送流不算她的话，一条都不许进来
+    assert not any(t.startswith("默契测试") for t in fresh)
+
+    # 她的话要能被解析成答案（两行格式）
+    assert link.parse_picks(fresh[0], 4, 2, None) == [1, 3], fresh[0]
+
+
 def test_parse_picks_reads_her_two_line_answer():
     """**真实事故**：提示语教她「回两个数字：①你自己选的 ②猜主人选的」，她就真写成
     两行——「①3，自然醒没人吵…」「②猜你选2，…」。
