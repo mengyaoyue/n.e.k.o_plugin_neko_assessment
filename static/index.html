@@ -45,7 +45,9 @@ h1{font-family:var(--font-ui);font-size:var(--fs-h1);margin:0;letter-spacing:.2p
 .pill{margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--glass);
   border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:var(--fs-sm);
   color:var(--ink2);box-shadow:var(--shadow);white-space:nowrap}
-.dot{width:8px;height:8px;border-radius:50%;background:#3dbd8b;box-shadow:0 0 0 4px rgba(61,189,139,.18)}
+.dot{width:8px;height:8px;border-radius:50%;background:#b9b3cf;box-shadow:0 0 0 4px rgba(185,179,207,.18)}
+.dot.ok{background:#3dbd8b;box-shadow:0 0 0 4px rgba(61,189,139,.18)}
+.dot.bad{background:#e0645f;box-shadow:0 0 0 4px rgba(224,100,95,.18)}
 
 .layout{display:grid;grid-template-columns:88px minmax(0,1fr);gap:16px;align-items:start}
 .rail{position:sticky;top:16px;display:flex;flex-direction:column;gap:4px;padding:8px;
@@ -383,7 +385,7 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
       <h1>心理测评室</h1>
       <div class="sub">心理 · 人格 · 趣味测评合集｜本地计分，结果只存在你这台机器上</div>
     </div>
-    <div class="pill"><span class="dot"></span><span id="pill-text">正在连接…</span></div>
+    <div class="pill"><span class="dot" id="pill-dot"></span><span id="pill-text">正在连接…</span></div>
   </div>
 
   <div class="layout">
@@ -825,6 +827,15 @@ function floatText(text, at){
   document.body.appendChild(node);
   setTimeout(() => node.remove(), 1200);
 }
+// 舞台类容器（电子板 / 切水果）会在 pointerdown 里 preventDefault + setPointerCapture，
+// 好让长按拖动不被浏览器掐断。副作用：指针被舞台抢走后，落在舞台内「按钮」上的
+// click 会被重定向到舞台自己，按钮的 onclick 永远不触发——切水果的「开始 / 继续 /
+// 再来一局」因此全点不动，只有舞台外的「重开一局」能用。所以按下点发生在交互控件
+// 上时不抢指针，交回浏览器走正常点击流程。
+function isUiHit(ev){
+  const t = ev.target;
+  return !!(t && t.closest && t.closest('button, a, input, select, textarea, label, summary, [role="button"]'));
+}
 function go(view){
   VIEWS.forEach((name) => $('view-' + name).classList.toggle('hidden', name !== view));
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.tab === view));
@@ -1050,6 +1061,23 @@ const CAT_DESC = {
 };
 const CAT_ORDER = ['人格', '情绪健康', '职业', '关系', '趣味'];
 $('q').oninput = renderGallery;
+// 状态胶囊必须说真话：连上才亮绿、连不上亮红。
+// 面板页常常比插件的 HTTP 服务先就绪，原来只试一次就定生死——失败后量表库空着，
+// 胶囊却一直亮着绿点写「连不上面板服务」（塔罗/切水果反而还能用，前后自相矛盾）。
+// 现在改成：失败亮红 + 自动重试（最多敲 30 秒），连上立刻恢复绿色和真实计数。
+let connFails = 0;
+let connTimer = 0;
+let connFirstFail = 0;
+function markConn(ok, text){
+  $('pill-text').textContent = text;
+  const dot = $('pill-dot');
+  if (dot){ dot.classList.toggle('ok', ok); dot.classList.toggle('bad', !ok); }
+}
+function scheduleReconnect(){
+  if (connTimer) return;
+  if (connFirstFail && Date.now() - connFirstFail > 30000) return;   // 敲够 30 秒还没起来就停手
+  connTimer = setTimeout(() => { connTimer = 0; loadScales(); }, 1500);
+}
 async function loadScales(){
   try {
     const res = await api('/api/scales');
@@ -1063,10 +1091,17 @@ async function loadScales(){
     $('filter-scale').innerHTML = '<option value="">全部量表</option>' +
       SCALES.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
     renderGallery();
-    $('pill-text').textContent = `${SCALES.length} 份量表 · 已做 ${SCALES.reduce((a, b) => a + (b.done || 0), 0)} 次`;
+    connFails = 0;
+    connFirstFail = 0;
+    if (connTimer){ clearTimeout(connTimer); connTimer = 0; }
+    markConn(true, `${SCALES.length} 份量表 · 已做 ${SCALES.reduce((a, b) => a + (b.done || 0), 0)} 次`);
   } catch (err) {
-    $('pill-text').textContent = '连不上面板服务';
-    $('gallery').innerHTML = `<div class="card">${esc(String(err))}</div>`;
+    connFails += 1;
+    if (!connFirstFail) connFirstFail = Date.now();
+    const retrying = Date.now() - connFirstFail <= 30000;
+    markConn(false, retrying ? '连不上面板服务 · 正在重试…' : '连不上面板服务');
+    if (!retrying) $('gallery').innerHTML = `<div class="card">${esc(String(err))}</div>`;
+    scheduleReconnect();
   }
 }
 function renderGallery(){
@@ -1670,7 +1705,10 @@ $('btn-clear').onclick = async () => {
   loadScales();
 };
 document.querySelectorAll('.tab').forEach((tab) => {
-  tab.addEventListener('click', () => { if (tab.dataset.tab === 'records') loadRecords(); });
+  tab.addEventListener('click', () => {
+    if (tab.dataset.tab === 'records') loadRecords();
+    if (tab.dataset.tab === 'home') loadScales();     // 手动回量表库时再探一次连接
+  });
 });
 
 // ── 猫娘塔罗 ────────────────────────────────────────────────
@@ -2715,6 +2753,7 @@ const mikutap = (() => {
         return;
       }
       stage.addEventListener('pointerdown', (ev) => {
+        if (isUiHit(ev)) return;                 // ⚠ 点「开始」按钮时别抢指针，否则它永远点不动
         const rect = stage.getBoundingClientRect();
         dragX = ev.clientX - rect.left;
         dragY = ev.clientY - rect.top;
@@ -3184,6 +3223,7 @@ const fruitGame = (() => {
     ready = true;
     resize();
     stage.addEventListener('pointerdown', (ev) => {
+      if (isUiHit(ev)) return;                 // ⚠ 点「开始 / 继续 / 再来一局」时别抢指针
       ev.preventDefault();                     // 长按别让浏览器起文字选择/拖拽
       try { stage.setPointerCapture(ev.pointerId); } catch (err) { /* 老内核没有就算了 */ }
       down = true;

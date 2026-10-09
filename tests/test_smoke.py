@@ -1093,3 +1093,49 @@ def test_panel_css_covers_late_sections():
     for sel in ("#tspreads", "#tspreads .tchip", ".tcard", ".mk-stage",
                 "#mk-canvas", ".segbtn", ".cm-pair"):
         assert sel in tail, "缺少样式（可能又被前面的语法错误吞掉）：" + sel
+
+
+# ── 舞台类容器不能吞掉内部按钮的点击（真实事故回归）─────────────
+def test_game_stage_does_not_swallow_button_clicks():
+    """#fr-stage / #mk-stage 会在 pointerdown 里 setPointerCapture。
+
+    指针被舞台抢走后，落在舞台内按钮上的 click 会被重定向到舞台自己，
+    按钮的 onclick 永远不触发——切水果的「开始 / 继续 / 再来一局」全在舞台内，
+    曾经因此全点不动（只有舞台外的「重开一局」能用）。真机用 Playwright 发真实
+    鼠标事件复现过：click 的 target 是 fr-stage 而不是 fr-start。
+
+    这里钉住两件事：① 两个舞台都先放行交互控件；② 这些按钮确实在舞台**内部**
+    （所以必须靠 ① 才能点得动）。谁删掉那行 guard，这个测试就红。
+    """
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert "function isUiHit(ev)" in html, "缺少交互控件放行判断"
+    assert html.count("if (isUiHit(ev)) return;") == 2, "电子板 / 切水果 两个舞台都要放行"
+    guard = re.search(r"function isUiHit\(ev\)\{(.*?)\n\}", html, re.S).group(1)
+    for sel in ("button", "input", "select", "textarea", "label", "summary"):
+        assert sel in guard, "isUiHit 没覆盖：" + sel
+
+    # 结构事实：按钮在舞台内部（块起始 => 下一个舞台外元素之间）
+    fruit = html[html.index('id="fr-stage"'):html.index('id="fr-restart"')]
+    assert 'id="fr-start"' in fruit, "「开始/继续/再来一局」按钮应当位于 #fr-stage 内部"
+    pad = html[html.index('id="mk-stage"'):html.index('id="mk-stop"')]
+    assert 'id="mk-start"' in pad, "「开始」按钮应当位于 #mk-stage 内部"
+
+
+# ── 状态胶囊必须如实反映连接状态（真实事故回归）─────────────────
+def test_pill_reports_real_connection_state():
+    """顶栏状态胶囊不许撒谎。
+
+    原来 .dot 底色**写死绿色**，后端连不上时文字写着「连不上面板服务」，
+    圆点却还是绿的；而且 loadScales 失败后不重试，量表库就永久空着
+    （塔罗/切水果反倒还能用，前后自相矛盾）。用户真机截图里正是这个状态。
+    """
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'id="pill-dot"' in html, "圆点需要 id 才能切换状态"
+    assert ".dot.bad{" in html and ".dot.ok{" in html, "缺少失败/成功两种圆点样式"
+    # 默认态必须是中性灰：连没连上都不知道的时候不能亮绿
+    base = re.search(r"\.dot\{([^}]*)\}", html).group(1)
+    assert "#3dbd8b" not in base, "默认圆点不能写死绿色"
+    assert "function markConn(" in html and "scheduleReconnect" in html
+    assert "markConn(true" in html and "markConn(false" in html, "成功/失败两条路都要更新胶囊"
+    # 失败必须能自动重试（面板页常比插件 HTTP 服务先就绪）
+    assert "connFirstFail" in html and "clearTimeout(connTimer)" in html
