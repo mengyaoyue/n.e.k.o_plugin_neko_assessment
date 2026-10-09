@@ -1041,3 +1041,55 @@ def test_panel_compat_tab_present():
     script = html.split("<script>", 1)[1]
     for probe in ("cmPollReveal", "你猜 YUI 会选", "action: 'reveal'", "离线档案"):
         assert probe in script or probe in html, probe
+
+
+# ── 面板 CSS 完整性（真实事故回归）─────────────────────────────
+def test_panel_css_well_formed():
+    """一条声明里少个右括号，浏览器会从那里开始丢弃后面所有规则。
+
+    v0.7.3~v0.12.0 一直潜伏着这个 bug：`.opt.on` 的 linear-gradient( 少了个 )，
+    实测浏览器只解析出 60 条规则（正常 221 条），塔罗卡、解压页、默契页的样式
+    整段失效——用户看到的就是「塔罗变丑 / 解压坏了」。这里用无依赖的括号配对
+    检查把它钉死，避免再次交付半截样式。
+    """
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    css = re.search(r"<style>(.*?)</style>", html, re.S).group(1)
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)   # 注释里的中文标点不算数
+    depth = paren = 0
+    bad = []
+    for lineno, line in enumerate(css.split("\n"), 1):
+        for ch in line:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth < 0:
+                    bad.append((lineno, "多余的 }"))
+                    depth = 0
+            elif ch == "(":
+                paren += 1
+            elif ch == ")":
+                paren -= 1
+                if paren < 0:
+                    bad.append((lineno, "多余的 )"))
+                    paren = 0
+        # 规则在行尾已闭合，却还留着没配对的括号 → 就是这次的事故形态
+        if depth == 0 and paren != 0:
+            bad.append((lineno, "括号未闭合(剩 %d)" % paren))
+            paren = 0
+    assert depth == 0, "大括号未闭合：%d" % depth
+    assert not bad, "CSS 括号不配对：%s" % bad[:5]
+
+
+def test_panel_css_covers_late_sections():
+    """塔罗/解压/默契这些「排在后面的」区块必须真的有样式规则。
+
+    它们全都写在曾经被吞掉的那一段之后，所以这条断言等同于「那次事故没复发」。
+    """
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    css = re.search(r"<style>(.*?)</style>", html, re.S).group(1)
+    cut = css.index(".opt.on{")
+    tail = css[cut:]
+    for sel in ("#tspreads", "#tspreads .tchip", ".tcard", ".mk-stage",
+                "#mk-canvas", ".segbtn", ".cm-pair"):
+        assert sel in tail, "缺少样式（可能又被前面的语法错误吞掉）：" + sel
