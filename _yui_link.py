@@ -349,6 +349,178 @@ class YuiFeed:
         return info
 
 
+# ── 实时总线：`ctx.bus.memory.get_sync` ────────────────────────
+# 宿主官方插件（neko_warthunder）读「用户刚说了什么」用的就是这条：
+#   ctx.bus.memory.get_sync(<角色名>, limit=N, timeout=T)  → 一批记录
+# 每条记录是对象，`.raw` 是 dict（含 `type` / `text` / `_ts`），另有 `.timestamp`。
+# 它是**内存里的实时环形缓冲**，不走落盘，所以不受"懒快照"影响。
+#
+# ⚠ 记录里的 `type` 取值没法从宿主的编译产物里确证（二进制里能看到
+# `user_message` / `ai_message` / `on_ai_message` / `note_ai_message` 这些字面量，
+# 但取不到完整的类型枚举）。所以这里**不做白名单**：只排除明确的"用户侧/自己"类型，
+# 其余文本一律当候选交给解析器——解析器认不出就自然不算答案，不会误判。
+_USER_SIDE_TYPES = frozenset({
+    "user_message", "user_text", "user", "voice_user_message", "asr_text",
+    "input_transcript", "text_user_message", "register_text_user_message",
+})
+# 明确的"她说的"类型，优先当答案候选
+_AI_SIDE_TYPES = (
+    "ai_message", "assistant_message", "lanlan_message", "ai_text",
+    "response", "reply", "chat_ai_message",
+)
+
+
+def _record_text(raw: dict) -> str:
+    """从一条总线记录里抠出文本。字段名不写死，挨个试常见的几个。"""
+    for key in ("text", "content", "message", "body", "visible_text"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, list):                     # OpenAI 风格 content 数组
+            parts = []
+            for item in value:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("text") or item.get("content") or ""))
+                else:
+                    parts.append(str(item))
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+    data = raw.get("data")
+    if isinstance(data, dict):
+        return _record_text(data)
+    return ""
+
+
+class YuiBus:
+    """实时总线（拉取式）。**这是唯一不依赖落盘的通道。**
+
+    `get_sync` 每次返回最近 ``limit`` 条，所以靠"见过就不再要"去重；
+    开新回合时先 ``mark_seen()`` 把当前存量吃掉，之后拿到的就都是新的。
+    """
+
+    _MAX_SEEN = 400
+
+    def __init__(self, ctx: Any = None, name: str = ""):
+        self.ctx = ctx
+        self.name = str(name or _DEFAULT_CHARACTER).strip() or _DEFAULT_CHARACTER
+        self._seen: dict[str, None] = {}          # 当有序集合用
+        self._round: list[str] = []               # 本轮开始以来收到的新话（给"补收"用）
+        self._kinds: list[str] = []
+        self._error = ""
+
+    def _get_sync(self) -> Any:
+        bus = getattr(self.ctx, "bus", None)
+        memory = getattr(bus, "memory", None)
+        return getattr(memory, "get_sync", None)
+
+    @property
+    def available(self) -> bool:
+        return callable(self._get_sync())
+
+    def records(self, limit: int = 30) -> list[dict]:
+        """最近的一批记录，归一化成 ``{kind, text, ts}``。失败返回空。"""
+        fn = self._get_sync()
+        if not callable(fn):
+            self._error = "ctx.bus.memory.get_sync 不可用"
+            return []
+        raw: Any = None
+        try:
+            raw = fn(self.name, limit=int(limit), timeout=0.4)
+        except TypeError:
+            try:
+                raw = fn(self.name, limit=int(limit))
+            except Exception as exc:
+                self._error = str(exc)
+                return []
+        except Exception as exc:
+            self._error = str(exc)
+            return []
+        out: list[dict] = []
+        for rec in list(raw or []):
+            payload = getattr(rec, "raw", rec)
+            if not isinstance(payload, dict):
+                continue
+            text = _record_text(payload)
+            if not text:
+                continue
+            kind = str(payload.get("type") or payload.get("kind") or "").strip()
+            out.append({
+                "kind": kind,
+                "text": text,
+                "ts": (getattr(rec, "timestamp", None)
+                       or payload.get("_ts") or payload.get("timestamp")),
+            })
+        return out
+
+    def kinds(self, limit: int = 40) -> list[str]:
+        """看到过哪些 ``type``。面板/日志用它自查"总线到底给了什么"。"""
+        seen = {r["kind"] for r in self.records(limit)}
+        return sorted(k for k in seen if k)
+
+    def error(self) -> str:
+        return self._error
+
+    def _remember(self, kind: str, text: str) -> None:
+        key = kind + "\x00" + text
+        self._seen.pop(key, None)
+        self._seen[key] = None
+        while len(self._seen) > self._MAX_SEEN:
+            self._seen.pop(next(iter(self._seen)), None)
+
+    def mark_seen(self, limit: int = 40) -> None:
+        """把当前存量全部吃掉：之后 ``new_texts()`` 只返回新出现的。
+
+        同时清空本轮累积（新回合重新开始记）。
+        """
+        self._round = []
+        for rec in self.records(limit):
+            self._remember(rec["kind"], rec["text"])
+
+    def round_texts(self) -> list[str]:
+        """**本轮开始以来**收到过的她的话（``mark_seen()`` 之后累积）。"""
+        return list(self._round)
+
+    def new_texts(self, limit: int = 40) -> list[str]:
+        """她新说的话（排除用户侧类型，按出现顺序）。"""
+        fresh: list[str] = []
+        for rec in self.records(limit):
+            kind = rec["kind"]
+            if kind in _USER_SIDE_TYPES:
+                continue
+            key = kind + "\x00" + rec["text"]
+            if key in self._seen:
+                continue
+            self._remember(kind, rec["text"])
+            self._kinds.append(kind)
+            self._round.append(rec["text"])
+            fresh.append(rec["text"])
+        return fresh
+
+    def stats(self) -> dict:
+        info: dict[str, Any] = {
+            "available": self.available,
+            "character": self.name,
+            "seen": len(self._seen),
+        }
+        if not self.available:
+            info["reason"] = self._error or "拿不到 ctx.bus.memory.get_sync"
+            return info
+        try:
+            recs = self.records(40)
+        except Exception as exc:
+            info["reason"] = str(exc)
+            return info
+        info["records"] = len(recs)
+        info["kinds"] = sorted({r["kind"] for r in recs if r["kind"]})
+        # 明确标成"她说的话"的记录有几条——自查用，免得再靠猜
+        info["ai_typed"] = sum(1 for r in recs if r["kind"] in _AI_SIDE_TYPES)
+        info["sample"] = [
+            {"kind": r["kind"], "text": r["text"][:40]} for r in recs[-3:]
+        ]
+        return info
+
+
 # ── 她的对话库 ────────────────────────────────────────────────
 _TS_CLEAN = re.compile(r"^\[\d{8}\s+\w{3}\s+\d{2}:\d{2}\]\s*")
 

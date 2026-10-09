@@ -1030,9 +1030,10 @@ def test_api_compat_actions(tmp_path):
         _compat_job = {"status": "idle", "round_id": "", "source": ""}
         _compat_reply = {}
         _compat_progress = {}
+        _COMPAT_HARVEST_SECONDS = 0.0
 
         def _yui_stats(self):
-            return {"available": True, "messages": 42}
+            return {"available": True, "messages": 42, "bus": {"available": True}}
 
         def _compat_start_round(self, question_ids, *, only=None, round_id=""):
             # 测试里不真的推给她：直接造一个"她已答完"的回合
@@ -1043,7 +1044,7 @@ def test_api_compat_actions(tmp_path):
                     "round_id": rid, "total": len(question_ids), "index": len(question_ids),
                     "status": "done", "answered": len(question_ids),
                     "items": [{"i": i + 1, "qid": q, "state": "ok", "picks": [0, 1],
-                               "raw": "1 2"} for i, q in enumerate(question_ids)],
+                               "raw": "1 2", "channel": "实时总线"} for i, q in enumerate(question_ids)],
                     "reason": "",
                 }
             self._compat.set_yui(rid,
@@ -1055,6 +1056,12 @@ def test_api_compat_actions(tmp_path):
                                        "total": len(question_ids)}
             self._compat_job = {"status": "done", "round_id": rid, "source": "herself"}
             return self._compat.get(rid)
+
+        def _compat_harvest_worker(self, rid, wait):
+            self._compat_harvested = rid
+
+        def _compat_finish(self, rid):
+            return None
 
     fake = Fake()
     res = cls._api_compat(fake, {"action": "start"})
@@ -1083,6 +1090,9 @@ def test_api_compat_actions(tmp_path):
     # 重问：告诉面板是重问哪几题
     res = cls._api_compat(fake, {"action": "ask_again", "round_id": rid})
     assert res["ok"] and "重问" in res["note"], res.get("note")
+    # 补收：后台跑，立刻回话
+    res = cls._api_compat(fake, {"action": "harvest", "round_id": rid})
+    assert res["ok"] and "补收" in res["note"], res.get("note")
     # 格式错误拒收
     res = cls._api_compat(fake, {"action": "submit", "round_id": rid, "answers": answers[:5]})
     assert res["ok"] is False
@@ -1097,12 +1107,14 @@ def test_panel_compat_tab_present():
                   'id="cm-reveal"', 'id="cm-history"'):
         assert probe in html, probe
     for probe in ('id="cm-yui-said"', 'id="cm-ask-again"', 'id="cfg-yui-dir"',
-                  'id="cm-yui-memory"', 'id="cm-live"', 'id="cm-live-reveal"'):
+                  'id="cm-yui-memory"', 'id="cm-live"', 'id="cm-live-reveal"',
+                  'id="cm-harvest"'):
         assert probe in html, probe
     script = html.split("<script>", 1)[1]
     for probe in ("cmPollReveal", "cmRenderLive", "你猜 YUI 会选", "action: 'reveal'",
-                  "action: 'ask_again'", "净默契分", "随机水平", "和瞎猜一样",
-                  "一题一条发给她", "她在对话里回的原话", "没答上", "未计分"):
+                  "action: 'ask_again'", "action: 'harvest'", "净默契分", "随机水平",
+                  "和瞎猜一样", "一题一条发给她", "她在对话里回的原话", "没答上", "未计分",
+                  "补收"):
         assert probe in script or probe in html, probe
     # 旧的"插件替她答/离线档案"那套必须彻底退场
     assert "离线档案" not in script, "不该再有任何「插件替她答」的残留"
@@ -1356,6 +1368,70 @@ def test_yui_feed_cursor_handles_repeated_replies():
     assert feed.new_her_turns({"count": 99, "tail": "查无此句"}) == []
 
 
+def _bus_ctx(rows):
+    """造一个只会返回给定记录的假 ctx.bus。"""
+    class Rec:
+        def __init__(self, kind, text, ts=1.0):
+            self.raw = {"type": kind, "text": text}
+            self.timestamp = ts
+
+    class Mem:
+        def get_sync(self, name, limit=30, timeout=0.4):
+            return rows[-int(limit):]
+
+    class Ctx:
+        def __init__(self):
+            self.bus = types.SimpleNamespace(memory=Mem())
+    return Ctx()
+
+
+def test_yui_bus_reads_real_time_and_skips_user_side():
+    """实时总线是唯一不滞后于落盘的通道。**用户那条不许混进来。**"""
+    link = _load("_yui_link")
+    R = lambda k, t: types.SimpleNamespace(raw={"type": k, "text": t}, timestamp=1.0)  # noqa: E731
+    rows = [R("user_message", "她答了吗"), R("ai_message", "本喵选1，猜主人2")]
+    bus = link.YuiBus(_bus_ctx(rows), "YUI")
+    assert bus.available
+    assert bus.kinds() == ["ai_message", "user_message"]
+    assert bus.new_texts() == ["本喵选1，猜主人2"], "不能把用户自己那条当成她的回答"
+    assert bus.new_texts() == [], "见过一次就不该再要"
+    assert bus.round_texts() == ["本喵选1，猜主人2"], "本轮累积供补收用"
+    bus.mark_seen()
+    assert bus.round_texts() == [], "开新一轮要把存量清掉"
+    rows.append(R("ai_message", "3 4"))
+    assert bus.new_texts() == ["3 4"]
+
+
+def test_yui_bus_tolerates_missing_sdk():
+    """拿不到 `get_sync` 时必须如实报"不可用"，绝不抛异常。"""
+    link = _load("_yui_link")
+    bus = link.YuiBus(object(), "YUI")
+    assert bus.available is False
+    assert bus.new_texts() == [] and bus.round_texts() == []
+    st = bus.stats()
+    assert st["available"] is False and st["reason"], st
+
+    # 参数名对不上时退回只传名字，也不能炸
+    class Mem:
+        def get_sync(self, name, limit=30):
+            return []
+
+    ctx = types.SimpleNamespace(bus=types.SimpleNamespace(memory=Mem()))
+    bus2 = link.YuiBus(ctx, "YUI")
+    assert bus2.available and bus2.new_texts() == []
+
+
+def test_yui_bus_extracts_text_from_several_shapes():
+    """记录里放正文的字段名有好几种可能，都要认。"""
+    link = _load("_yui_link")
+    assert link._record_text({"text": "甲"}) == "甲"
+    assert link._record_text({"content": "乙"}) == "乙"
+    assert link._record_text({"message": "丙"}) == "丙"
+    assert link._record_text({"content": [{"type": "text", "text": "丁"}]}) == "丁"
+    assert link._record_text({"data": {"content": [{"type": "text", "text": "戊"}]}}) == "戊"
+    assert link._record_text({"nothing": 1}) == ""
+
+
 def test_yui_dir_is_never_hardcoded(tmp_path, monkeypatch):
     """她的记忆位置因人而异，**源码里不许写死某个人的绝对路径**。"""
     src = (ROOT / "_yui_link.py").read_text(encoding="utf-8")
@@ -1404,14 +1480,55 @@ def test_compat_ask_text_carries_one_question_only():
 
 
 # ── 面谈调度：她答一题才问下一题 ─────────────────────────────
-def _interview_fake(cls, tmp_path, *, replies):
+def _interview_fake(cls, tmp_path, *, replies, late=None):
     """搭一个只够跑逐题面谈的假插件。
 
-    ``replies``：每一题她的回复（``None`` = 这题她没开口）。
+    ``replies``：每一题她当场回的话（``None`` = 那题当场没接住）。
+    ``late``：需要"晚一步才可读"的测试可以直接改 ``fake._compat_bus_cache.late``。
     """
     compat = _load("_compat")
     pushed: list[str] = []
     box = list(replies)
+    state = {"done": 0}
+
+    class Bus:
+        """假实时总线：`ctx.bus.memory.get_sync` 的替身。"""
+        available = True
+
+        def __init__(self, *_a, **_k):
+            self.round: list[str] = []
+            self.late: list[str] = list(late or [])
+
+        def mark_seen(self):
+            self.round = []
+            state["done"] = 0
+
+        def round_texts(self):
+            return list(self.round) + list(self.late)
+
+        def new_texts(self):
+            out: list[str] = []
+            while self.late:                    # 迟到的话随时可以变得可读
+                text = self.late.pop(0)
+                self.round.append(text)
+                out.append(text)
+            k = len(pushed)
+            if k > state["done"] and k <= len(box):
+                state["done"] = k
+                reply = box[k - 1]
+                if reply:
+                    self.round.append(reply)
+                    out.append(reply)
+            return out
+
+        def kinds(self, limit=20):
+            return ["ai_message"]
+
+        def records(self, limit=20):
+            return []
+
+        def stats(self):
+            return {"available": True, "kinds": ["ai_message"]}
 
     class Feed:
         available = True
@@ -1423,10 +1540,6 @@ def _interview_fake(cls, tmp_path, *, replies):
             return {"count": len(pushed), "tail": "", "her_n": 0}
 
         def new_her_turns(self, snap):
-            n = int((snap or {}).get("count") or 0)
-            if len(pushed) > n and len(pushed) <= len(box):
-                reply = box[len(pushed) - 1]
-                return [reply] if reply else []
             return []
 
         def stats(self):
@@ -1435,37 +1548,52 @@ def _interview_fake(cls, tmp_path, *, replies):
     fake = types.SimpleNamespace(
         _compat=compat.CompatStore(tmp_path / "compat.json"),
         _compat_job={}, _compat_reply={}, _compat_progress={},
-        _compat_feed=Feed(), _yui_mem=False,
+        _compat_bus_cache=Bus(), _compat_feed=Feed(), _yui_mem=False,
         _stop_event=__import__("threading").Event(),
         _COMPAT_ASK_MAX_CHARS=cls._COMPAT_ASK_MAX_CHARS,
         _COMPAT_PER_Q_WAIT=0.05, _COMPAT_POLL_SECONDS=0.005,
+        _COMPAT_HARVEST_SECONDS=0.05,
         logger=types.SimpleNamespace(warning=lambda *a, **k: None,
                                      info=lambda *a, **k: None,
                                      exception=lambda *a, **k: None),
     )
     fake._char_name = lambda: "YUI"
+    fake._yui_bus = lambda: fake._compat_bus_cache
     fake._yui_feed = lambda: fake._compat_feed
     fake._yui_dialog = lambda: None
     fake._compat_push_text = lambda text, desc: pushed.append(text)
     for name in ("_compat_ask_text", "_compat_answer_hint", "_compat_cursors",
-                 "_compat_new_texts", "_compat_await_one", "_compat_finish",
-                 "_compat_interview", "_compat_start_round", "_yui_stats"):
+                 "_compat_new_texts", "_compat_all_new_texts", "_compat_await_one",
+                 "_compat_finish", "_compat_harvest", "_compat_harvest_worker",
+                 "_compat_interview", "_compat_start_round", "_compat_log_channels",
+                 "_yui_stats"):
         setattr(fake, name, types.MethodType(getattr(cls, name), fake))
     qids = [q["id"] for q in compat.QUESTIONS[:10]]
     return fake, pushed, qids
 
 
+def _wait_round(fake, tries: int = 900) -> None:
+    """等这一轮落定。
+
+    注意：面谈结束时会先定稿、再**后台**补收，所以中途状态会短暂变成
+    ``harvesting``——要等它真的停下来，不然断言到的是中间态。
+    """
+    import time as _t
+    for _ in range(tries):
+        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
+            _t.sleep(0.05)          # 给后台补收一拍，让它把状态写完
+            if fake._compat_job.get("status") in ("done", "no_answer", "error"):
+                return
+        _t.sleep(0.01)
+
+
 def test_interview_sends_one_question_at_a_time(tmp_path):
     """她逐题回，插件逐题收——一次推送只带一道题。"""
     cls = _plugin_cls()
-    compat = _load("_compat")
     replies = [f"{i % 4 + 1} {(i + 1) % 4 + 1}" for i in range(10)]
     fake, pushed, qids = _interview_fake(cls, tmp_path, replies=replies)
     fake._compat_start_round(qids)
-    for _ in range(400):
-        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
-            break
-        __import__("time").sleep(0.01)
+    _wait_round(fake)
     assert len(pushed) == 10, f"应该一题一条推 10 次，实际 {len(pushed)} 次"
     for i, text in enumerate(pushed, 1):
         assert f"{i}/10" in text, text
@@ -1478,15 +1606,19 @@ def test_interview_sends_one_question_at_a_time(tmp_path):
     assert fake._compat_reply[entry["id"]]["answered"] == 10
 
 
+def test_interview_waits_short_then_lets_harvest_catch_up(tmp_path):
+    """等一题的时间必须短——10 题 × 75 秒 = 12.5 分钟，用户会以为卡死了。"""
+    cls = _plugin_cls()
+    assert cls._COMPAT_PER_Q_WAIT <= 30.0, cls._COMPAT_PER_Q_WAIT
+    assert cls._COMPAT_HARVEST_SECONDS > 0, "得留一次「回头再收」的机会"
+
+
 def test_interview_never_fabricates_when_she_stays_silent(tmp_path):
     """她没开口就如实说没答上：留空 + 从计分里剔除，**绝不替她编一份**。"""
     cls = _plugin_cls()
     fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[None] * 10)
     fake._compat_start_round(qids)
-    for _ in range(400):
-        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
-            break
-        __import__("time").sleep(0.01)
+    _wait_round(fake)
     assert pushed, "题还是得问出去"
     entry = fake._compat.get(fake._compat_job["round_id"])
     assert entry["yui"] is None, "不许伪造答案"
@@ -1497,16 +1629,60 @@ def test_interview_never_fabricates_when_she_stays_silent(tmp_path):
     assert all(it["state"] == "skipped" for it in prog["items"])
 
 
+def test_harvest_gets_back_answers_that_landed_late(tmp_path):
+    """她的回答晚一步才可读时，「补收」要能把它们按顺序补回没答上的题。
+
+    真实事故：她 20:36 就答了，可宿主的对话库到 20:38 最后一条还是 20:10——
+    落盘是**懒触发**的。所以不能一判"没答上"就完事，得回头再收。
+    """
+    cls = _plugin_cls()
+    compat = _load("_compat")
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
+    fake._compat.start_round("r1", qids)
+    prog = {
+        "round_id": "r1", "total": len(qids), "index": len(qids), "status": "asking",
+        "answered": 2, "reason": "",
+        "items": [{"i": i + 1, "qid": q, "state": "pending"} for i, q in enumerate(qids)],
+    }
+    # 当场只接住第 1、3 题
+    prog["items"][0].update({"state": "ok", "picks": [0, 1], "raw": "1 2",
+                             "channel": "实时总线"})
+    prog["items"][2].update({"state": "ok", "picks": [1, 0], "raw": "2 1",
+                             "channel": "实时总线"})
+    fake._compat_progress["r1"] = prog
+    fake._compat.set_self("r1", {"own": [0] * 10, "guess": [1] * 10})
+    # 这一句现在才变得可读（模拟她其实早说了、只是刚进总线）
+    fake._compat_bus_cache.late = ["2 3", "4 1", "1 4"]
+
+    got = fake._compat_harvest("r1", 0.0)
+    assert got["filled"] == 3, got
+    # 按顺序补到还没答上的第 2、4、5 题上
+    assert prog["items"][1]["raw"] == "2 3" and prog["items"][1]["picks"] == [1, 2]
+    assert prog["items"][3]["raw"] == "4 1" and prog["items"][3]["picks"] == [3, 0]
+    assert prog["items"][4]["raw"] == "1 4" and prog["items"][4]["picks"] == [0, 3]
+    # 补收来的必须标明，让人看得出是当场接住的还是事后补的
+    assert program_channel(prog, 1) == "实时总线·补收"
+    assert program_channel(prog, 0) == "实时总线", "当场接住的不该被标成补收"
+    # 已经答上的题不会被覆盖
+    assert prog["items"][0]["raw"] == "1 2"
+
+    fake._compat_finish("r1")
+    entry = fake._compat.get("r1")
+    assert entry["yui_answered"] == [0, 1, 2, 3, 4]
+    assert entry["yui"]["own"][1] == 1 and entry["yui"]["guess"][1] == 2
+
+
+def program_channel(prog, index):
+    return (prog["items"][index].get("channel") or "")
+
+
 def test_interview_scores_only_the_questions_she_answered(tmp_path):
     """她只答上一部分时：只算答上的，其余如实标 skipped、不进分。"""
     cls = _plugin_cls()
     fake, pushed, qids = _interview_fake(
         cls, tmp_path, replies=["1 2", None, "3 4", None, "1 1", None, None, "2 2", None, "4 4"])
     fake._compat_start_round(qids)
-    for _ in range(600):
-        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
-            break
-        __import__("time").sleep(0.01)
+    _wait_round(fake)
     entry = fake._compat.get(fake._compat_job["round_id"])
     assert entry["yui_answered"] == [0, 2, 4, 7, 9]
     assert entry["yui"]["own"][1] is None, "没答上的题必须留空"
@@ -1531,19 +1707,13 @@ def test_compat_ask_again_retries_only_the_missing_questions(tmp_path):
     cls = _plugin_cls()
     fake, pushed, qids = _interview_fake(cls, tmp_path, replies=["1 2"] + [None] * 9)
     fake._compat_start_round(qids)
-    for _ in range(600):
-        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
-            break
-        __import__("time").sleep(0.01)
+    _wait_round(fake)
     rid = fake._compat_job["round_id"]
     before = len(pushed)
     fake._api_compat = types.MethodType(cls._api_compat, fake)
     res = fake._api_compat({"action": "ask_again", "round_id": rid})
     assert res["ok"] and "9 题" in res["note"], res.get("note")
-    for _ in range(600):
-        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
-            break
-        __import__("time").sleep(0.01)
+    _wait_round(fake)
     assert len(pushed) == before + 9, "只重问没答上的那 9 题"
 
 
@@ -1554,6 +1724,7 @@ def test_panel_shows_her_actual_words():
     assert "她在对话里回的原话" in html
     assert "yui_reply" in html
     assert "把没答上的重问一次" in html
+    assert "补收她的回答" in html
     assert 'id="cm-live"' in html and 'id="cm-live-reveal"' in html
     assert "cmRenderLive" in html
     # 她没答上的题要显式标出来，不许混过去

@@ -706,6 +706,7 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
           <div id="cm-live" class="cml"></div>
           <div class="row" style="margin-top:10px">
             <button class="ghost tiny hidden" id="cm-ask-again">把没答上的重问一次</button>
+            <button class="ghost tiny hidden" id="cm-harvest">补收她的回答</button>
           </div>
         </div>
 
@@ -3351,25 +3352,32 @@ function cmStage(name){
 }
 
 function cmSetMemoryBox(res){
-  // 读她的两条通道。**如实报**：哪条通、哪条不通，不通就直说读不回来
+  // 读她的三条通道。**如实报**：哪条通、哪条不通，不通就直说读不回来
   const mem = (res && res.memory) || {};
   const box = $('cm-yui-memory');
   if (!box) return;
+  const bus = mem.bus || {};
   const db = mem.db || {};
-  const feedOk = !!mem.available && !db.available;      // 只有对话流通
   const parts = [];
+  if (bus.available){
+    const kinds = (bus.kinds || []).join(' / ') || '还没抓到';
+    parts.push(`① 实时总线：<b>能用</b>（当前 ${bus.records || 0} 条，类型：${esc(kinds)}）`);
+  } else {
+    parts.push(`① 实时总线：<b>连不上</b>（${esc(bus.reason || '未就绪')}）——它不滞后，是最好的一条。`);
+  }
   if (mem.available){
-    parts.push(`主通道（宿主对话流）：能用，看到 <b>${mem.messages || 0}</b> 条对话`
+    parts.push(`② 宿主对话流：能用，看到 <b>${mem.messages || 0}</b> 轮`
       + `（其中她说 <b>${mem.her_messages || 0}</b> 条）。`);
   } else {
-    parts.push(`主通道（宿主对话流）：<b>连不上</b>（${esc(mem.reason || '未就绪')}）。`);
+    parts.push(`② 宿主对话流：连不上（${esc(mem.reason || '未就绪')}）。`);
   }
   parts.push(db.available
-    ? `备用通道（她的对话库）：能读（${esc(db.yui_dir || '已定位')}，${db.messages || 0} 条）。`
-    : `备用通道（她的对话库）：读不到（${esc(db.reason || '未定位到')}）。`);
-  box.className = 'notice' + (mem.available ? ' good' : ' bad');
-  box.innerHTML = parts.join('<br>')
-    + (mem.available ? '' : '<br>两条都不通的话，她答了题我们也读不回来。');
+    ? `③ 她的对话库：能读（${esc(db.yui_dir || '已定位')}，${db.messages || 0} 条）。`
+    : `③ 她的对话库：读不到（${esc(db.reason || '未定位到')}）。`);
+  parts.push('<span class="muted">②③ 都靠宿主落盘，而落盘是懒触发的（要等你发言或空闲维护），'
+    + '所以她的回答可能晚一会儿才可读——那时可以用「补收她的回答」把迟到的收回来。</span>');
+  box.className = 'notice' + (bus.available || mem.available ? ' good' : ' bad');
+  box.innerHTML = parts.join('<br>');
   const input = $('cfg-yui-dir');
   if (input && !input.value) input.value = (res && res.yui_memory_dir) || '';
 }
@@ -3483,8 +3491,9 @@ function cmWaitText(job, answered, progress){
     // 逐题面谈是**一题一条**发过去、等她答完再发下一题，所以这里要说清进度，
     // 不然一等等几分钟、面板又只说"正在等"，看起来像卡死了。
     case 'asking':      return `题目一题一条发给她了，正在等她用自己的话答…（她会在对话里说话）${tail}`;
-    case 'timeout':     return `等了很久她还没答上来（${j.reason || ''}）。${tail}`;
-    case 'no_answer':   return `她一句带编号的话都没说上来（${j.reason || ''}）。${tail}`;
+    case 'harvesting':  return `正在回头补收她的回答（宿主的落盘比她说得慢）…${tail}`;
+    case 'timeout':     return `这一题等了一会儿没接住（${j.reason || ''}）。${tail} 可以点「补收她的回答」，迟到的也能捞回来。`;
+    case 'no_answer':   return `暂时没接住她的话（${j.reason || ''}）。${tail} 她可能已经答了、只是还没落盘——点「补收她的回答」再收一次。`;
     case 'no_dialog':   return `两条读回通道都不通，所以她答了也读不回来（${j.reason || ''}）。`;
     case 'push_failed': return `题目没推给她：${j.reason || ''}`;
     case 'error':       return `出错了：${j.reason || ''}`;
@@ -3504,6 +3513,10 @@ async function cmPollReveal(){
     const st = (res.job && res.job.status) || '';
     const stuck = ['timeout', 'no_answer', 'no_dialog', 'push_failed', 'error'].includes(st);
     $('cm-ask-again').classList.toggle('hidden', !stuck);
+    // 她的回答可能晚一步才可读（宿主落盘是懒触发的），所以任何没答上的情况都能补收
+    const missing = ((res.progress && res.progress.items) || [])
+      .some((it) => !(it.picks || []).length);
+    $('cm-harvest').classList.toggle('hidden', !missing);
     if (res.status === 'waiting'){
       cmRenderLive(res.progress, 'cm-live');   // 等待中才往等待卡里刷进度
       return;                                  // 她还没交卷，下轮再问
@@ -3542,6 +3555,19 @@ $('cm-ask-again').onclick = async () => {
   try {
     const res = await api('/api/compat', {action: 'ask_again', round_id: CM_ROUND.id});
     if (!res.ok){ $('cm-wait-text').textContent = res.error || '重问失败'; return; }
+    if (!cmTimer) cmTimer = setInterval(cmPollReveal, 1500);
+    cmPollReveal();
+  } catch (err){ $('cm-wait-text').textContent = String(err); }
+};
+
+$('cm-harvest').onclick = async () => {
+  // 她的回答常常晚一步才可读（宿主落盘是懒触发的），这里回头再收一次
+  $('cm-wait-text').textContent = '正在从对话里补收她的回答…';
+  $('cm-harvest').classList.add('hidden');
+  try {
+    const res = await api('/api/compat', {action: 'harvest', round_id: CM_ROUND.id});
+    if (!res.ok){ $('cm-wait-text').textContent = res.error || '补收失败'; return; }
+    floatText(res.note || '正在补收喵', {x: window.innerWidth / 2, y: 120});
     if (!cmTimer) cmTimer = setInterval(cmPollReveal, 1500);
     cmPollReveal();
   } catch (err){ $('cm-wait-text').textContent = String(err); }

@@ -86,6 +86,17 @@ _COMPAT_HINT = "回两个数字：①你自己选的 ②猜主人选的（编号
 _COMPAT_HINT_SHORT = "回两个数字：①你自己 ②猜主人"
 
 
+def _dedupe_texts(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """同一句话可能被多条通道读到；按原文去重，保持先后顺序。"""
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for text, channel in pairs:
+        if text and text not in seen:
+            seen.add(text)
+            out.append((text, channel))
+    return out
+
+
 _mark('before-class')
 
 
@@ -115,7 +126,9 @@ class AssessmentPlugin(NekoPluginBase):
             self._compat_reply: dict[str, dict] = {}
             # 逐题面谈的实时进度（面板要显示"她正在答第几题"，以及每题的原文/结果）
             self._compat_progress: dict[str, dict] = {}
-            # 主读回通道（宿主记忆服务对话流）：None=还没建，False=建不起来
+            # 主读回通道（宿主实时总线 ctx.bus.memory.get_sync）
+            self._compat_bus_cache: Any = None
+            # 次通道（宿主记忆服务对话流）：None=还没建，False=建不起来
             self._compat_feed: Any = None
             # 备用通道：她的对话库；None=还没建，False=定位不到，否则是 YuiDialog
             self._yui_mem: Any = None
@@ -677,8 +690,14 @@ class AssessmentPlugin(NekoPluginBase):
     # 新增的多行**共享同一个时间戳**，`timestamp > since` 会读到用户那条、读漏她那条。
     # 主通道改走宿主记忆服务的实时对话流，备用通道按自增 `id` 锚点读。
     _COMPAT_ASK_MAX_CHARS = _COMPAT_ASK_MAX_CHARS   # 单条推送的硬上限（见模块级注释）
-    _COMPAT_PER_Q_WAIT = 75.0       # 等她为某一题开口的最长时间
+    # 等她为某一题开口。她回得很快（实测几秒），25 秒足够；等不到就交给"补收"，
+    # 不要在这里死等——10 题 × 75 秒 = 12.5 分钟，用户等到以为程序卡死了。
+    _COMPAT_PER_Q_WAIT = 25.0
     _COMPAT_POLL_SECONDS = 1.5
+    # 全部问完之后，后台再盯一会儿，把"迟到"的回答陆续收回来。
+    # 实测宿主的落盘要等几分钟（她 20:36 说的，20:40:58 才进库），所以这个窗口
+    # 不能短——但它是**后台跑的**，不挡面板，收齐了会自己停。
+    _COMPAT_HARVEST_SECONDS = 300.0
 
     # ── 读她的两条通道 ────────────────────────────────────────
     def _char_name(self) -> str:
@@ -712,16 +731,24 @@ class AssessmentPlugin(NekoPluginBase):
         return self._yui_mem or None
 
     def _yui_stats(self) -> dict:
-        """面板用的诊断：两条通道各自能不能用，如实报，不美化。"""
+        """面板用的诊断：三条通道各自能不能用，如实报，不美化。"""
         info: dict[str, Any] = {}
+        bus = self._yui_bus()
+        if bus is not None:
+            try:
+                info["bus"] = bus.stats()
+            except Exception as exc:
+                info["bus"] = {"available": False, "reason": str(exc)}
+        else:
+            info["bus"] = {"available": False, "reason": "通道没建起来"}
         feed = self._yui_feed()
         if feed is not None:
             try:
-                info = feed.stats()
+                info = dict(info, **feed.stats())
             except Exception as exc:
-                info = {"available": False, "reason": str(exc)}
+                info.update({"available": False, "reason": str(exc)})
         else:
-            info = {"available": False, "reason": "通道没建起来"}
+            info.update({"available": False, "reason": "通道没建起来"})
         dlg = self._yui_dialog()
         if dlg is not None:
             try:
@@ -791,9 +818,31 @@ class AssessmentPlugin(NekoPluginBase):
             finally:
                 loop.close()
 
-    # ── 读回：对话流优先，对话库兜底 ──────────────────────────
-    def _compat_cursors(self) -> tuple[dict, int]:
-        """推题**之前**记下游标；两条通道各记一份，读回时谁先有算谁。"""
+    # ── 读回：实时总线 → 对话流 → 对话库 ──────────────────────
+    def _yui_bus(self) -> Any:
+        """实时总线：`ctx.bus.memory.get_sync`。
+
+        **这是唯一不依赖落盘的通道**，官方插件读"用户刚说了什么"用的就是它。
+        宿主的对话落盘是**懒触发**的（要等用户发言或空闲维护才快照），所以对话流
+        和对话库都会滞后到没法用来"等她回答"——上一版就栽在这上面：她的回答
+        20:36 就说了，而库里到 20:38 还是没有。
+        """
+        if self._compat_bus_cache is None:
+            try:
+                self._compat_bus_cache = _yui_link.YuiBus(self.ctx, self._char_name())
+            except Exception as exc:
+                self.logger.warning("[assessment] 建实时总线通道失败：{}", exc)
+                self._compat_bus_cache = False
+        return self._compat_bus_cache or None
+
+    def _compat_cursors(self, *, mark_bus: bool = True) -> tuple[dict, int]:
+        """推题**之前**记下游标。总线把存量吃掉；对话流/对话库各记一份。"""
+        bus = self._yui_bus()
+        if bus is not None and mark_bus:
+            try:
+                bus.mark_seen()
+            except Exception:
+                pass
         snap: dict = {}
         feed = self._yui_feed()
         if feed is not None:
@@ -811,14 +860,21 @@ class AssessmentPlugin(NekoPluginBase):
         return snap, mark
 
     def _compat_new_texts(self, snap: dict, mark: int) -> list[tuple[str, str]]:
-        """她相对游标新说的话：``[(原文, 通道)]``。对话流有结果就不再看库。"""
+        """她相对游标新说的话：``[(原文, 通道)]``。**总线优先**，它不滞后。"""
         out: list[tuple[str, str]] = []
-        feed = self._yui_feed()
-        if feed is not None:
+        bus = self._yui_bus()
+        if bus is not None:
             try:
-                out.extend((t, "对话流") for t in feed.new_her_turns(snap))
+                out.extend((t, "实时总线") for t in bus.new_texts())
             except Exception:
                 pass
+        if not out:
+            feed = self._yui_feed()
+            if feed is not None:
+                try:
+                    out.extend((t, "对话流") for t in feed.new_her_turns(snap))
+                except Exception:
+                    pass
         if not out:
             dlg = self._yui_dialog()
             if dlg is not None and dlg.available:
@@ -826,13 +882,32 @@ class AssessmentPlugin(NekoPluginBase):
                     out.extend((row["text"], "对话库") for row in dlg.new_replies(mark))
                 except Exception:
                     pass
-        seen: set[str] = set()
-        uniq: list[tuple[str, str]] = []
-        for text, channel in out:
-            if text and text not in seen:
-                seen.add(text)
-                uniq.append((text, channel))
-        return uniq
+        return _dedupe_texts(out)
+
+    def _compat_all_new_texts(self, prog: dict) -> list[tuple[str, str]]:
+        """**这一轮开始以来**她说的所有话（不只当前这一题），给"补收"用。"""
+        out: list[tuple[str, str]] = []
+        bus = self._yui_bus()
+        if bus is not None:
+            try:
+                out.extend((t, "实时总线") for t in bus.round_texts())
+            except Exception:
+                pass
+        start = prog.get("start") or {}
+        feed = self._yui_feed()
+        if feed is not None:
+            try:
+                out.extend((t, "对话流") for t in feed.new_her_turns(start.get("snap") or {}))
+            except Exception:
+                pass
+        dlg = self._yui_dialog()
+        if dlg is not None and dlg.available:
+            try:
+                out.extend((row["text"], "对话库")
+                           for row in dlg.new_replies(int(start.get("mark") or 0)))
+            except Exception:
+                pass
+        return _dedupe_texts(out)
 
     def _compat_await_one(self, question_id: str, index: int, total: int,
                           deadline: float) -> tuple[list[int], str, str]:
@@ -844,7 +919,7 @@ class AssessmentPlugin(NekoPluginBase):
         pub = _compat.question_public(question_id) or {}
         options = [str(o) for o in (pub.get("options") or [])]
         n_options = max(2, len(options))
-        snap, mark = self._compat_cursors()
+        snap, mark = self._compat_cursors(mark_bus=False)
         self._compat_push_text(
             self._compat_ask_text(index, total, question_id),
             f"🐾 默契测试 第 {index}/{total} 题",
@@ -865,6 +940,87 @@ class AssessmentPlugin(NekoPluginBase):
             else:
                 time.sleep(self._COMPAT_POLL_SECONDS)
         return [], last_text, last_channel
+
+    # ── 补收：她的回答晚一步才可读时，回头再收一次 ────────────
+    def _compat_harvest(self, round_id: str, wait_seconds: float = 0.0) -> dict:
+        """把「她后来说的话」按顺序补给还没答上的题。
+
+        为什么非要有这一步：宿主的对话落盘是**懒触发**的（要等用户发言或空闲
+        维护才快照）。实测她 20:36 就答了，而对话库到 20:38 还是最后一条 20:10，
+        对话流也一样——三个通道里只有实时总线不滞后。所以宁可先把没接住的题标成
+        "没答上"，过一会儿再回来收；**收回来的一律标「·补收」**，让人看得出
+        是当场接住的还是事后补的。
+
+        配对规则：新收到的、还没被用过的回答，按先后顺序补到还没答上的题上。
+        """
+        prog = self._compat_progress.get(round_id)
+        if not isinstance(prog, dict):
+            return {"filled": 0, "note": "没有这一轮的进度记录"}
+        entry = self._compat.get(round_id)
+        if entry is None:
+            return {"filled": 0, "note": "没有找到这一轮"}
+        if entry.get("status") == "revealed":
+            return {"filled": 0, "note": "这一轮已经揭晓了，补收不会改分"}
+        qids = [str(q) for q in (entry.get("question_ids") or [])]
+        items = prog.get("items") or []
+        deadline = time.time() + max(0.0, float(wait_seconds))
+        total = 0
+        while True:
+            cands = self._compat_all_new_texts(prog)
+            used = {it.get("raw") for it in items if it.get("raw")}
+            filled_now = 0
+            for i, item in enumerate(items):
+                if item.get("picks") or i >= len(qids):
+                    continue
+                pub = _compat.question_public(qids[i]) or {}
+                options = [str(o) for o in (pub.get("options") or [])]
+                for text, channel in cands:
+                    if text in used:
+                        continue
+                    picks = _yui_link.parse_picks(text, max(2, len(options)), 2, options)
+                    if not picks:
+                        continue
+                    item.update({"state": "ok", "picks": picks, "raw": text,
+                                 "channel": "%s·补收" % channel})
+                    used.add(text)
+                    filled_now += 1
+                    break
+            cont = prog.setdefault("candidates", [])
+            cont[:] = [t for t, _ in cands][:20]
+            total += filled_now
+            prog["items"] = items
+            prog["answered"] = sum(1 for it in items if len(it.get("picks") or []) == 2)
+            if filled_now or time.time() >= deadline:
+                break
+            stop = getattr(self, "_stop_event", None)
+            if stop is not None and stop.is_set():
+                break
+            prog["status"] = "harvesting"
+            if stop is not None:
+                stop.wait(self._COMPAT_POLL_SECONDS)
+            else:
+                time.sleep(self._COMPAT_POLL_SECONDS)
+        if total:
+            self.logger.info("[assessment] 默契补收回 {} 题（{}）", total, round_id)
+        return {
+            "filled": total,
+            "answered": int(prog.get("answered") or 0),
+            "note": ("补收回 %d 题" % total) if total else "没有收到新的回答",
+        }
+
+    def _compat_harvest_worker(self, round_id: str, wait_seconds: float) -> None:
+        """后台补收：边收边更新进度，收齐（或到点）再定稿。"""
+        try:
+            self._compat_job = {"status": "harvesting", "round_id": round_id, "source": ""}
+            got = self._compat_harvest(round_id, wait_seconds)
+            self._compat_finish(round_id)
+            if got.get("filled"):
+                self.logger.info("[assessment] 补收完成：{} 题（{}）", got["filled"], round_id)
+        except Exception as exc:
+            self.logger.warning("[assessment] 补收线程异常：{}", traceback.format_exc())
+            job = dict(self._compat_job)
+            job["reason"] = str(exc)
+            self._compat_job = job
 
     # ── 面谈调度 ─────────────────────────────────────────────
     def _compat_finish(self, round_id: str) -> None:
@@ -945,7 +1101,13 @@ class AssessmentPlugin(NekoPluginBase):
                 items[i] = item
                 prog["items"] = items
             prog["index"] = total
+            # 先定稿（面板立刻有个明确状态），再后台盯一会儿把"迟到"的回答捞回来
             self._compat_finish(round_id)
+            threading.Thread(
+                target=self._compat_harvest_worker,
+                args=(round_id, self._COMPAT_HARVEST_SECONDS),
+                daemon=True, name="neko-assess-harvest",
+            ).start()
         except Exception as exc:
             self.logger.warning("[assessment] 逐题面谈线程异常：{}", traceback.format_exc())
             prog = self._compat_progress.get(round_id)
@@ -982,12 +1144,52 @@ class AssessmentPlugin(NekoPluginBase):
                     prog["items"][i]["picks"] = []
             prog["status"] = "asking"
             prog["reason"] = ""
+        # 回合起点游标：补收时要用它把「这一轮以来她说的所有话」捞全
+        snap, mark = self._compat_cursors()
+        prog["start"] = {"snap": snap, "mark": mark}
+        prog["answered"] = sum(1 for it in prog["items"] if len(it.get("picks") or []) == 2)
+        self._compat_log_channels()
         self._compat_job = {"status": "asking", "round_id": round_id, "source": "herself"}
         threading.Thread(
             target=self._compat_interview, args=(round_id, question_ids, only),
             daemon=True, name="neko-assess-compat",
         ).start()
         return entry
+
+    def _compat_log_channels(self) -> None:
+        """把三条读回通道各能看到什么写进插件日志。
+
+        上一版"她答了却读不到"排查了很久——因为通道失败被 `except: pass` 吞了，
+        日志里一片空白。这一行是给自己留的证据，重启后直接看日志就够了。
+        """
+        try:
+            bus = self._yui_bus()
+            bus_info = "未建" if bus is None else (
+                "不可用" if not bus.available else
+                "type=%s 记录%d条" % (bus.kinds(20) or "（空）", len(bus.records(20))))
+        except Exception as exc:
+            bus_info = "异常：%s" % exc
+        feed_info = "未建"
+        feed = self._yui_feed()
+        if feed is not None:
+            try:
+                base = feed._base() if feed.base == "" else feed.base
+                feed_info = ("连上 %s，看到 %d 轮" % (base, len(feed.turns()))
+                             if base else "连不上宿主记忆服务")
+            except Exception as exc:
+                feed_info = "异常：%s" % exc
+        dlg = self._yui_dialog()
+        db_info = "未定位到"
+        if dlg is not None:
+            try:
+                st = dlg.stats()
+                db_info = ("%s，%s 条，最后 %s"
+                           % ("可读" if st.get("available") else "不可读",
+                              st.get("messages", "?"), st.get("latest") or "—"))
+            except Exception as exc:
+                db_info = "异常：%s" % exc
+        self.logger.info("[assessment] 默契读回通道自查 → 实时总线：{}；对话流：{}；对话库：{}",
+                         bus_info, feed_info, db_info)
 
     # ── 接口 ─────────────────────────────────────────────────
     def _api_compat(self, body: dict) -> dict:
@@ -1029,6 +1231,26 @@ class AssessmentPlugin(NekoPluginBase):
             return {"ok": True, "job": dict(self._compat_job),
                     "note": f"只重问没答上的 {len(missing)} 题。",
                     "progress": dict(self._compat_progress.get(round_id) or {})}
+
+        if action == "harvest":
+            # 她的回答**晚一步**才可读（宿主落盘是懒触发的）。与其判她"没答上"，
+            # 不如回头再收一次：后台跑，面板照旧轮询 reveal 看进度。
+            round_id = str(payload.get("round_id") or "").strip()
+            entry = self._compat.get(round_id)
+            if entry is None:
+                return {"ok": False, "error": "没有找到这一轮，可能已经换新一轮了。"}
+            if entry.get("status") == "revealed":
+                return {"ok": True, "job": dict(self._compat_job),
+                        "progress": dict(self._compat_progress.get(round_id) or {}),
+                        "note": "这一轮已经揭晓了，补收不会改分。"}
+            threading.Thread(
+                target=self._compat_harvest_worker,
+                args=(round_id, self._COMPAT_HARVEST_SECONDS),
+                daemon=True, name="neko-assess-harvest",
+            ).start()
+            return {"ok": True, "job": dict(self._compat_job),
+                    "progress": dict(self._compat_progress.get(round_id) or {}),
+                    "note": "正在从对话里补收她的回答，进度会自己往上走。"}
 
         if action == "submit":
             round_id = str(payload.get("round_id") or "").strip()
