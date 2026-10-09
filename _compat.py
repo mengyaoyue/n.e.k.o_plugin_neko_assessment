@@ -10,6 +10,17 @@
 - 她猜中你 c/10：她猜的就是你实际选的
 - 综合默契分 = (a+b+c)/30 × 100，口径就这三项，没有黑箱。
 
+## 计分口径（容易刻错的一把尺子）
+
+直觉写法是 `(心意相通 + 你懂她 + 她懂你) / 3N × 100`，但这把尺子的**零点不是 0**：
+每题 4 个选项，所以每一项瞎蒙都有 1/4 命中率，三项合计的期望是 `3N/4`
+（10 题就是 7.5 次）。于是"毫无默契"也会显示成 25 分左右——分数永远在 20~30 徘徊，
+**没有任何区分度**（实测两个完全随机作答的人，97% 的轮次落在 20 分以内）。
+
+所以这里把**随机水平挪到零点**：``score=0`` 就是"和瞎猜一样"。
+满分刻度取「高出随机 2.5 个标准差」而不是「三项全中」——后者概率是 (1/4)^30，
+一辈子碰不到，拿它当 100 分等于上半截刻度全是废的。
+
 ## YUI 的答案从哪来（诚实第一）
 
 - 模型在线：LLM 后台线程现场作答（source="llm"），那才是"她自己想的"；
@@ -26,6 +37,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import threading
@@ -38,6 +50,65 @@ from ._compat_data import CATEGORIES, QUESTION_BY_ID, QUESTIONS
 ROUND_SIZE = 10
 MAX_ROUNDS = 30
 VALID_STATUS = ("answering", "ready", "revealed", "abandoned")
+
+# 满分刻度：高出随机水平 2.5 个标准差。（全中要 (1/4)^30，那是废刻度）
+CHANCE_SIGMA_FOR_FULL = 2.5
+
+# 分数档位文案（下限, 名称）
+SCORE_BANDS: tuple[tuple[int, str], ...] = (
+    (0, "和瞎猜差不多"),
+    (1, "略高于瞎猜"),
+    (21, "有点默契"),
+    (46, "挺懂对方"),
+    (71, "很默契"),
+    (91, "极难出现的默契"),
+)
+
+
+def band_of(score: int) -> str:
+    """把净默契分翻成一句人话。"""
+    label = SCORE_BANDS[0][1]
+    for floor, name in SCORE_BANDS:
+        if int(score) >= floor:
+            label = name
+    return label
+
+
+def mean_options(question_ids: list[str]) -> float:
+    """本轮平均选项数——"瞎蒙命中率"就是它的倒数。"""
+    counts = []
+    for qid in question_ids:
+        q = QUESTION_BY_ID.get(str(qid)) or {}
+        counts.append(max(2, len(q.get("options") or [])))
+    return (sum(counts) / len(counts)) if counts else 4.0
+
+
+def chance_hits(question_ids: list[str]) -> float:
+    """随机水平：三项指标各瞎蒙一遍，期望命中多少次。"""
+    n = len(question_ids)
+    return 3.0 * n / mean_options(question_ids) if n else 0.0
+
+
+def score_from_counts(
+    same: int,
+    self_hit: int,
+    yui_hit: int,
+    total: int,
+    options: float = 4.0,
+) -> int:
+    """净默契分：**0 = 随机水平**，100 = 高出随机 2.5 个标准差。
+
+    只依赖原始计数，所以历史轮次也能用新口径重算（见 ``CompatStore.history``）。
+    """
+    n = max(1, int(total))
+    m = max(2.0, float(options))
+    hits = int(same) + int(self_hit) + int(yui_hit)
+    base = 3.0 * n / m
+    sd = math.sqrt(3.0 * n * (1.0 / m) * (1.0 - 1.0 / m))
+    if sd <= 0:
+        return 0
+    z = (hits - base) / sd
+    return int(max(0, min(100, round(z / CHANCE_SIGMA_FOR_FULL * 100))))
 
 
 def question_public(question_id: str) -> Optional[dict]:
@@ -139,13 +210,18 @@ def classify_round(question_ids: list[str], self_a: dict, yui_a: dict) -> dict:
             "tags": tags,
         })
     total = len(question_ids) or 1
-    score = round((same + self_hit + yui_hit) / (3 * total) * 100)
+    opts = mean_options(question_ids)
+    hits = same + self_hit + yui_hit
+    score = score_from_counts(same, self_hit, yui_hit, total, opts)
     return {
         "same": same,
         "self_hit": self_hit,
         "yui_hit": yui_hit,
         "total": len(question_ids),
+        "hits": hits,
+        "chance_hits": round(chance_hits(question_ids), 2),
         "score": score,
+        "band": band_of(score),
         "rows": rows,
     }
 
@@ -266,20 +342,33 @@ class CompatStore:
         return None
 
     def history(self, limit: int = 12) -> list[dict]:
-        """已揭晓的回合摘要（首页展示用，不带逐题答案）。"""
+        """已揭晓的回合摘要（首页展示用，不带逐题答案）。
+
+        分数**按当前口径从原始计数重算**，所以调过计分规则后，旧轮次也会跟着
+        显示成新刻度，不会一半新一半旧（原始数据只存 a/b/c，不存推导值）。
+        """
         rows = []
         for entry in self._rounds(self._read()):
             if not isinstance(entry, dict) or entry.get("status") != "revealed":
                 continue
             result = entry.get("result") or {}
+            qids = [str(q) for q in (entry.get("question_ids") or [])]
+            total = int(result.get("total") or len(qids) or 1)
+            same = int(result.get("same") or 0)
+            self_hit = int(result.get("self_hit") or 0)
+            yui_hit = int(result.get("yui_hit") or 0)
+            score = score_from_counts(same, self_hit, yui_hit, total, mean_options(qids))
             rows.append({
                 "id": entry.get("id"),
                 "ts": entry.get("ts"),
-                "score": result.get("score", 0),
-                "same": result.get("same", 0),
-                "self_hit": result.get("self_hit", 0),
-                "yui_hit": result.get("yui_hit", 0),
-                "total": result.get("total", 0),
+                "score": score,
+                "band": band_of(score),
+                "same": same,
+                "self_hit": self_hit,
+                "yui_hit": yui_hit,
+                "hits": same + self_hit + yui_hit,
+                "chance_hits": round(chance_hits(qids), 2),
+                "total": total,
                 "yui_source": entry.get("yui_source", ""),
             })
             if len(rows) >= limit:
@@ -291,10 +380,15 @@ __all__ = [
     "CATEGORIES",
     "QUESTIONS",
     "ROUND_SIZE",
+    "SCORE_BANDS",
     "CompatStore",
     "archive_answers",
+    "band_of",
+    "chance_hits",
     "classify_round",
+    "mean_options",
     "question_public",
     "sample_questions",
+    "score_from_counts",
     "validate_answers",
 ]

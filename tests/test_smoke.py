@@ -939,13 +939,61 @@ def test_compat_classify_scoring():
     self_a = {"own": [0] * 10, "guess": [1] * 10}
     yui_a = {"own": [0] * 10, "guess": [0] * 10}
     r = compat.classify_round(qids, self_a, yui_a)
-    # 自选全同（10）+ 她猜你全中（10）+ 你猜她全空（0）= 20/30 → 67 分
+    # 自选全同（10）+ 她猜你全中（10）+ 你猜她全空（0）= 命中 20 次，随机水平才 7.5 -> 顶格
     assert r["same"] == 10 and r["yui_hit"] == 10 and r["self_hit"] == 0
-    assert r["score"] == 67
+    assert r["hits"] == 20 and r["chance_hits"] == 7.5
+    assert r["score"] == 100
     assert all("心意相通" in row["tags"] for row in r["rows"])
     # 完全错开：0 分
     r = compat.classify_round(qids, {"own": [0]*10, "guess": [0]*10}, {"own": [1]*10, "guess": [1]*10})
     assert r["score"] == 0 and all(row["tags"] == ["擦肩而过"] for row in r["rows"])
+
+
+def test_compat_score_is_calibrated_to_chance():
+    """默契分必须以「随机水平」为零点，否则这个数字没有区分度。
+
+    旧口径 (a+b+c)/3N 的期望是 1/4（每题 4 选项），10 题 = 7.5 次命中，
+    线性映射后"完全瞎猜"也显示 25 分；实测两个随机作答的人 97% 的轮次
+    落在 20 分以内 —— 那根本不是默契分，是个常数（用户就是撞见这个才来问的）。
+    """
+    compat = _load("_compat")
+    score = compat.score_from_counts
+    # 随机水平及以下 -> 0 分
+    assert score(3, 2, 2, 10) == 0            # 命中 7 次，低于随机
+    assert score(0, 0, 0, 10) == 0            # 不能给负分
+    # 略高于随机
+    assert 0 < score(3, 3, 2, 10) <= 30       # 8 次
+    # 明显高于随机
+    assert 40 <= score(4, 4, 3, 10) <= 70     # 11 次
+    # 顶格可达（不是"三项全中"那种一辈子碰不到的刻度）
+    assert score(5, 5, 4, 10) == 100          # 14 次
+    assert score(10, 10, 10, 10) == 100
+    # 单调不减
+    seq = [score(k, 0, 0, 10) for k in range(31)]
+    assert seq == sorted(seq)
+    # 随机水平确实是 7.5（题库每题 4 选项）
+    assert compat.chance_hits([q["id"] for q in compat.QUESTIONS[:10]]) == 7.5
+
+
+def test_compat_history_recomputes_score_on_current_scale(tmp_path):
+    """历史轮次按当前口径从原始计数重算，不会一半新刻度一半旧刻度。"""
+    compat = _load("_compat")
+    store = compat.CompatStore(tmp_path / "compat.json")
+    qids = [q["id"] for q in compat.QUESTIONS[:10]]
+    store.start_round("r1", qids)
+    store.set_self("r1", {"own": [0]*10, "guess": [1]*10})
+    store.set_yui("r1", {"own": [0]*10, "guess": [0]*10}, "llm")
+    store.reveal("r1")
+    hist = store.history()
+    assert len(hist) == 1
+    row = hist[0]
+    assert row["hits"] == 20 and row["chance_hits"] == 7.5
+    assert row["score"] == 100 and row["band"]
+    # 把存盘里的 score 改成旧口径的假值，history 必须按原始计数重算、不认那个字段
+    state = json.loads(store.path.read_text(encoding="utf-8"))
+    state["rounds"][0]["result"]["score"] = 67
+    store.path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    assert store.history()[0]["score"] == 100
 
 
 def test_compat_store_state_machine(tmp_path):
@@ -1039,7 +1087,8 @@ def test_panel_compat_tab_present():
                   'id="cm-reveal"', 'id="cm-history"'):
         assert probe in html, probe
     script = html.split("<script>", 1)[1]
-    for probe in ("cmPollReveal", "你猜 YUI 会选", "action: 'reveal'", "离线档案"):
+    for probe in ("cmPollReveal", "你猜 YUI 会选", "action: 'reveal'", "离线档案",
+                  "净默契分", "随机水平", "和瞎猜一样"):
         assert probe in script or probe in html, probe
 
 
