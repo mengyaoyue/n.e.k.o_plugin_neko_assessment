@@ -274,6 +274,7 @@ class CompatStore:
                 "self": None,
                 "yui": None,
                 "yui_source": "",
+                "remembered": False,      # 是否已回写进猫娘的长期记忆（见 mark_remembered）
                 "result": None,
             }
             rounds.insert(0, entry)
@@ -340,6 +341,24 @@ class CompatStore:
             if isinstance(entry, dict) and entry.get("id") == str(round_id):
                 return entry
         return None
+
+    def mark_remembered(self, round_id: str) -> bool:
+        """标记这一轮已经回写进猫娘的记忆；返回 True 表示本次是第一次。
+
+        面板是轮询揭晓的，没有这个标记就会把同一轮反复灌进她的长期记忆。
+        """
+        with self._lock:
+            state = self._read()
+            entry = self._find(state, round_id)
+            if entry is None or entry.get("remembered"):
+                return False
+            entry["remembered"] = True
+            try:
+                self._write(state)
+            except Exception as exc:
+                if self.logger is not None:
+                    self.logger.warning("[assessment] 默契回写标记失败：{}", exc)
+            return True
 
     def history(self, limit: int = 12) -> list[dict]:
         """已揭晓的回合摘要（首页展示用，不带逐题答案）。

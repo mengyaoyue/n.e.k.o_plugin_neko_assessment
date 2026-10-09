@@ -643,14 +643,17 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
           <h2>你和 YUI 的默契度</h2>
           <div class="muted" style="margin-bottom:11px">
             一轮 10 题，每题答两问：<b>你自己选什么</b>，再<b>猜 YUI 会选什么</b>。
-            你答题的同时她也在独立作答——模型在线时是她现场想的，断线时用离线档案并会<b>明确标注</b>。
-            双方都交卷才同时揭晓，谁也偷看不了谁。题库 60 题全自写，结果只存本机。
+            你答题的同时她也在独立作答——她会读<b>自己的人设和关于你的记忆</b>来选，
+            不是随便挑一个。双方都交卷才同时揭晓，谁也偷看不了谁。题库 60 题全自写，结果只存本机。
+            <br><br>
+            <b>她记得这一轮</b>：揭晓后这一轮会写回她的长期记忆，以后聊起来她是知道的。
             <br><br>
             <b>分数怎么算</b>：每题 4 个选项，所以三项指标瞎蒙各有 1/4 命中率，10 题的随机水平是
             <b>7.5 次</b>命中。默契分已经扣掉这条基线——<b>0 分 = 和瞎猜一样</b>，
             100 分 = 高出随机水平 2.5 个标准差（很难出现）。所以 0 分很常见，
             它只说明"没超出随机"，不代表你们差。
           </div>
+          <div class="notice" id="cm-memory-box" style="margin-bottom:11px"></div>
           <div class="row">
             <button id="cm-start">🐾 开始一轮</button>
             <span class="status" id="st-compat"></span>
@@ -693,6 +696,7 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
             <div class="sum" id="cm-summary"></div>
           </div>
           <div class="stats" id="cm-stats"></div>
+          <div class="notice" id="cm-reveal-memory" style="margin-top:12px"></div>
           <div class="hr"></div>
           <div id="cm-rows"></div>
           <div class="row" style="margin-top:12px">
@@ -3329,6 +3333,21 @@ function cmStage(name){
 function cmLoadHistory(){
   api('/api/compat', {action: 'info'}).then((res) => {
     if (!res || res.ok === false) return;
+    const mem = res.memory || {};
+    const box = $('cm-memory-box');
+    if (box){
+      if (mem.available){
+        box.className = 'notice good';
+        box.innerHTML = `她的记忆库已接上：<b>${mem.facts || 0} 条</b>长期事实、`
+          + `人设 <b>${mem.persona_sections || 0}</b> 段、`
+          + `${mem.db_exists ? '对话库可读' : '对话库缺失'}`
+          + `${mem.yui_dir ? '（' + esc(mem.yui_dir) + '）' : ''}。她答题时用的就是这些。`;
+      } else {
+        box.className = 'notice bad';
+        box.textContent = `⚠ 读不到她的记忆库（${mem.reason || '路径不存在'}）——`
+          + `那样她的答案只是通用猫娘话术，不算她本人想的。`;
+      }
+    }
     const hist = res.history || [];
     $('cm-history').innerHTML = hist.length ? hist.map((h) => {
       const d = new Date((h.ts || 0) * 1000);
@@ -3444,6 +3463,25 @@ function cmRenderReveal(res){
   $('cm-source').textContent = res.yui_source === 'archive'
     ? 'YUI 离线档案作答（模型不在线，不是现场想的）'
     : 'YUI 现场作答';
+  // 她答题时到底参考了什么：如实写出来。三态——有/没有/记录已丢，不许混成一句。
+  // 注意要写进**揭晓卡里**那个盒子：介绍页的 #cm-memory-box 这会儿是隐藏的。
+  const ym = res.yui_memory || {};
+  const memBox = $('cm-reveal-memory');
+  if (memBox){
+    if (ym.available === true){
+      memBox.className = 'notice good';
+      memBox.innerHTML = `她的依据：读到了自己的人设、<b>${ym.facts || 0} 条</b>`
+        + `关于你的记忆、<b>${ym.dialog || 0}</b> 句近期对话——所以这轮答案是她本人拿主意，不是随机挑的。`;
+    } else if (ym.available === false){
+      memBox.className = 'notice bad';
+      memBox.textContent = `⚠ 没读到她的记忆库（${ym.reason || '记忆文件不可读'}）——`
+        + `这一轮她只按通用猫娘话术作答，答案不能算"她本人想的"。`;
+    } else {
+      memBox.className = 'notice';
+      memBox.textContent = `这一轮的作答记录不可用（${ym.reason || '未知原因'}）——`
+        + `没法确认她当时参考了什么，所以不做判断。`;
+    }
+  }
   $('cm-stats').innerHTML = `
     <div class="stat"><b>${r.same}</b><span>心意相通</span></div>
     <div class="stat"><b>${r.self_hit}</b><span>你懂她</span></div>

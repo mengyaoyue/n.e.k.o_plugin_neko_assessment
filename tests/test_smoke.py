@@ -1028,6 +1028,18 @@ def test_api_compat_actions(tmp_path):
         data_dir = tmp_path
         _compat = _load("_compat").CompatStore(tmp_path / "compat.json")
         _compat_job = {"status": "idle", "round_id": "", "source": ""}
+        _compat_memory = {}
+        written = []
+
+        def _yui_stats(self):
+            return {"available": True, "facts": 3, "persona_sections": 3}
+
+        def _compat_write_back(self, entry):   # 只记录调没调用，不碰真实记忆库
+            fresh = self._compat.get(entry["id"]) or {}
+            if fresh.get("remembered"):
+                return
+            if self._compat.mark_remembered(entry["id"]):
+                self.written.append(entry["id"])
 
         def _compat_worker(self, round_id):   # 测试里不真跑 LLM：直接喂档案答案
             entry = self._compat.get(round_id)
@@ -1057,6 +1069,13 @@ def test_api_compat_actions(tmp_path):
     res = cls._api_compat(fake, {"action": "reveal", "round_id": rid})
     assert res["ok"] and res["status"] == "revealed"
     assert res["yui_source"] == "archive" and res["result"]["total"] == 10
+    assert "yui_memory" in res
+    # 揭晓要触发一次「写回她的记忆」，且重复揭晓（面板是轮询的）不再触发
+    assert fake.written == [rid], fake.written
+    cls._api_compat(fake, {"action": "reveal", "round_id": rid})
+    assert fake.written == [rid], "重复揭晓不该重复回写"
+    info_res = cls._api_compat(fake, {"action": "info"})
+    assert info_res["memory"]["available"] is True
     assert len(res["result"]["rows"]) == 10
     # 格式错误拒收
     res = cls._api_compat(fake, {"action": "submit", "round_id": rid, "answers": answers[:5]})
@@ -1188,3 +1207,150 @@ def test_pill_reports_real_connection_state():
     assert "markConn(true" in html and "markConn(false" in html, "成功/失败两条路都要更新胶囊"
     # 失败必须能自动重试（面板页常比插件 HTTP 服务先就绪）
     assert "connFirstFail" in html and "clearTimeout(connTimer)" in html
+
+
+# ── 猫娘记忆桥：她得真的在答题、也真的记得（用户报的问题）──────────
+_NULL_LOG = types.SimpleNamespace(warning=lambda *a, **k: None,
+                                  info=lambda *a, **k: None,
+                                  exception=lambda *a, **k: None)
+
+
+def _write_fake_memory(dirpath):
+    dirpath.mkdir(parents=True, exist_ok=True)
+    (dirpath / "persona.json").write_text(json.dumps({
+        "neko": {"facts": [{"text": "YUI 是住在主人电脑里的猫娘，爱吃小鱼干", "reinforcement": 5}]},
+        "master": {"facts": [{"text": "主人叫梦瑶月，是做插件的开发者", "reinforcement": 5}]},
+        "relationship": {"facts": [{"text": "YUI 每天早上会叫主人起床", "reinforcement": 5}]},
+    }, ensure_ascii=False), encoding="utf-8")
+    (dirpath / "facts.json").write_text(json.dumps([
+        {"text": "主人喜欢深夜写代码，经常忘记吃饭", "importance": 5},
+    ], ensure_ascii=False), encoding="utf-8")
+    return dirpath
+
+
+def test_yui_memory_degrades_when_missing(tmp_path, monkeypatch):
+    """记忆库读不到时静默降级——她可以失忆，但不能让默契测试开不了局。"""
+    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", str(tmp_path / "nope"))
+    mem = _load("_yui_memory").YuiMemory()
+    assert mem.persona_block() == ""
+    assert mem.recall("随便问点什么", 3) == []
+    assert mem.recent_dialog(3) == []
+    block, info = mem.compat_context(["默契测试"])
+    assert block == "" and info["available"] is False
+
+
+def test_yui_memory_reads_persona_and_reports_sources(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", str(_write_fake_memory(tmp_path / "YUI")))
+    mem = _load("_yui_memory").YuiMemory()
+    block, info = mem.compat_context(["默契测试 主人 喜欢"])
+    assert "小鱼干" in block and "梦瑶月" in block, block
+    assert info["available"] is True and info["persona"] > 0
+    st = mem.stats()
+    assert st["available"] is True and st["persona_sections"] == 3
+
+
+def _compat_fake_plugin(cls, chat):
+    """造一个只够跑 _compat_llm 的假插件（模型调用被替换成记录器）。"""
+    fake = types.SimpleNamespace(
+        _COMPAT_SYSTEM=cls._COMPAT_SYSTEM, _yui_mem=None, _compat_memory={},
+        _llm_chat=chat, logger=_NULL_LOG,
+    )
+    fake._yui = types.MethodType(cls._yui, fake)
+    fake._compat_memory_block = types.MethodType(cls._compat_memory_block, fake)
+    fake._parse_compat_answers = types.MethodType(cls._parse_compat_answers, fake)
+    return fake
+
+
+def test_compat_prompt_carries_persona_and_memory(tmp_path, monkeypatch):
+    """给模型的 prompt 必须真的带上她的人设和记忆。
+
+    原来只发「一句通用猫娘话术 + 10 道题」，所以 own 其实是模型随手挑的，
+    而且这一轮从没进过她的记忆——用户原话「bot 替猫娘随机选择了，
+    猫娘都不知道自己答题了」。
+    """
+    import asyncio
+    cls = _plugin_cls()
+    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", str(_write_fake_memory(tmp_path / "YUI")))
+    seen = {}
+    good = '{"own": [0,1,2,3,0,1,2,3,0,1], "guess": [1,0,3,2,1,0,3,2,1,0]}'
+
+    async def chat(system, user, max_tokens=1024):
+        seen["system"], seen["user"] = system, user
+        return good
+
+    fake = _compat_fake_plugin(cls, chat)
+    compat = _load("_compat")
+    qids = [q["id"] for q in compat.QUESTIONS[:10]]
+    ans = asyncio.run(cls._compat_llm(fake, "r1", qids))
+    assert len(ans["own"]) == 10 and len(ans["guess"]) == 10
+    assert "小鱼干" in seen["system"], "prompt 里没有她的人设"
+    assert "梦瑶月" in seen["system"], "prompt 里没有关于主人的记忆"
+    assert "你本人" in seen["system"], "没告诉她 own 要按自己的性子选"
+    assert compat.question_public(qids[0])["text"] in seen["user"]
+    assert fake._compat_memory["r1"]["available"] is True
+
+
+def test_compat_prompt_admits_when_memory_unreadable(tmp_path, monkeypatch):
+    """读不到记忆时必须明说，不许装作记得。"""
+    import asyncio
+    cls = _plugin_cls()
+    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", str(tmp_path / "missing"))
+    seen = {}
+
+    async def chat(system, user, max_tokens=1024):
+        seen["system"] = system
+        return '{"own": [0,0,0,0,0,0,0,0,0,0], "guess": [0,0,0,0,0,0,0,0,0,0]}'
+
+    fake = _compat_fake_plugin(cls, chat)
+    compat = _load("_compat")
+    asyncio.run(cls._compat_llm(fake, "r1", [q["id"] for q in compat.QUESTIONS[:10]]))
+    assert "没读到你的记忆库" in seen["system"]
+    assert fake._compat_memory["r1"]["available"] is False
+
+
+def test_compat_write_back_writes_once(tmp_path):
+    """揭晓时把这一轮写回她的长期记忆；一轮只写一次。"""
+    cls = _plugin_cls()
+    compat = _load("_compat")
+    store = compat.CompatStore(tmp_path / "compat.json")
+    qids = [q["id"] for q in compat.QUESTIONS[:10]]
+    store.start_round("r1", qids)
+    store.set_self("r1", {"own": [0] * 10, "guess": [1] * 10})
+    store.set_yui("r1", {"own": [0] * 10, "guess": [0] * 10}, "llm")
+    store.reveal("r1")
+
+    pushed = []
+
+    class Mem:
+        def push_experience(self, text):
+            pushed.append(text)
+            return True
+
+    fake = types.SimpleNamespace(_compat=store, _yui=lambda: Mem(), logger=_NULL_LOG)
+    fake._compat_write_back = types.MethodType(cls._compat_write_back, fake)
+    entry = store.get("r1")
+    fake._compat_write_back(entry)
+    fake._compat_write_back(entry)
+    assert len(pushed) == 1, "同一轮只该回写一次"
+    assert "默契测试" in pushed[0] and "默契分" in pushed[0]
+    assert store.get("r1")["remembered"] is True
+
+    # 记忆库不可用时不许标记（等它能读了再补），也不许抛异常
+    store2 = compat.CompatStore(tmp_path / "b.json")
+    store2.start_round("r2", qids)
+    store2.set_self("r2", {"own": [0] * 10, "guess": [1] * 10})
+    store2.set_yui("r2", {"own": [0] * 10, "guess": [0] * 10}, "llm")
+    store2.reveal("r2")
+    fake2 = types.SimpleNamespace(_compat=store2, _yui=lambda: None, logger=_NULL_LOG)
+    fake2._compat_write_back = types.MethodType(cls._compat_write_back, fake2)
+    fake2._compat_write_back(store2.get("r2"))
+    assert store2.get("r2")["remembered"] is False
+
+
+def test_panel_shows_what_she_used():
+    """面板必须如实写出她答题时参考了什么，读不到就要警告。"""
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'id="cm-memory-box"' in html
+    for probe in ("她的依据", "她的记忆库已接上", "没读到她的记忆库",
+                  "她记得这一轮", "yui_memory"):
+        assert probe in html, probe
