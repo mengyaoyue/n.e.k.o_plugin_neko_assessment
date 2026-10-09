@@ -137,6 +137,10 @@ class AssessmentPlugin(NekoPluginBase):
             self._stop_event = threading.Event()
             # 收到过多少次 chat 事件（只记前 40 条日志，用来判断能不能收到她的话）
             self._chat_events: int = 0
+            # 我们自己推出去的原文。**它绝不能当成她的回答**——实时总线里
+            # `MESSAGE_PUSH` 这一类就是我们自己的推送，踩过：面板把她答的题显示成
+            # 我推的题目原文，「解析成选项 3/4」其实是从我题目的选项编号里抠的。
+            self._compat_pushed: set[str] = set()
         except Exception:
             _dump_crash("init")
             raise
@@ -814,6 +818,10 @@ class AssessmentPlugin(NekoPluginBase):
         """把一段话推进对话，请她本人回应。失败要抛出去，让面板如实显示。"""
         if len(text) > self._COMPAT_ASK_MAX_CHARS * 3:
             raise ValueError(f"推送正文过长（{len(text)} 字符），拒绝发送")
+        try:
+            self._compat_pushed.add(self._compat_norm(text))
+        except Exception:
+            pass
         result = self.ctx.push_message(
             source=_PLUGIN_ID,
             visibility=["chat"],
@@ -870,6 +878,24 @@ class AssessmentPlugin(NekoPluginBase):
                 mark = 0
         return snap, mark
 
+    @staticmethod
+    def _compat_norm(text: str) -> str:
+        return " ".join(str(text or "").split())
+
+    def _compat_is_our_push(self, text: str) -> bool:
+        """这段文字是不是**我们自己推出去的**。
+
+        实时总线里有一类 `MESSAGE_PUSH`（往对话里推的消息流），我们自己的题目就在
+        里面，而且题目正文自带「1 xxx 2 yyy 3 zzz 4 www」这种选项编号——解析器会
+        从里面抠出"3 4"当成她的回答。所以两道闸门：原文比对 + 题目标记。
+        """
+        norm = self._compat_norm(text)
+        if not norm:
+            return True
+        if norm in getattr(self, "_compat_pushed", ()):
+            return True
+        return "默契测试" in norm and ("/10" in norm or "/20" in norm)
+
     def _compat_new_texts(self, snap: dict, mark: int) -> list[tuple[str, str]]:
         """她相对游标新说的话：``[(原文, 通道)]``。**总线优先**，它不滞后。"""
         out: list[tuple[str, str]] = []
@@ -893,7 +919,7 @@ class AssessmentPlugin(NekoPluginBase):
                     out.extend((row["text"], "对话库") for row in dlg.new_replies(mark))
                 except Exception:
                     pass
-        return _dedupe_texts(out)
+        return [(t, c) for t, c in _dedupe_texts(out) if not self._compat_is_our_push(t)]
 
     def _compat_all_new_texts(self, prog: dict) -> list[tuple[str, str]]:
         """**这一轮开始以来**她说的所有话（不只当前这一题），给"补收"用。"""
@@ -918,7 +944,7 @@ class AssessmentPlugin(NekoPluginBase):
                            for row in dlg.new_replies(int(start.get("mark") or 0)))
             except Exception:
                 pass
-        return _dedupe_texts(out)
+        return [(t, c) for t, c in _dedupe_texts(out) if not self._compat_is_our_push(t)]
 
     def _compat_await_one(self, question_id: str, index: int, total: int,
                           deadline: float) -> tuple[list[int], str, str]:
@@ -1321,6 +1347,11 @@ class AssessmentPlugin(NekoPluginBase):
                 db_info = "异常：%s" % exc
         self.logger.info("[assessment] 默契读回通道自查 → 实时总线：{}；对话流：{}；对话库：{}",
                          bus_info, feed_info, db_info)
+        try:
+            self.logger.info("[assessment] 总线各通道实调：{}",
+                             _yui_link.bus_probe(self.ctx, self._char_name()))
+        except Exception as exc:
+            self.logger.warning("[assessment] 总线探测失败：{}", exc)
         try:
             self.logger.info("[assessment] ctx.bus 门面：{}", _yui_link.bus_report(self.ctx))
         except Exception as exc:

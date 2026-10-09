@@ -1609,11 +1609,14 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
                                      exception=lambda *a, **k: None),
     )
     fake._char_name = lambda: "YUI"
+    fake._compat_pushed = set()
     fake._yui_bus = lambda: fake._compat_bus_cache
     fake._yui_feed = lambda: fake._compat_feed
     fake._yui_dialog = lambda: None
     fake._compat_push_text = lambda text, desc: pushed.append(text)
-    for name in ("_compat_ask_text", "_compat_answer_hint", "_compat_cursors",
+    fake._compat_norm = cls._compat_norm          # staticmethod，直接挂函数
+    for name in ("_compat_ask_text", "_compat_answer_hint", "_compat_is_our_push",
+                 "_compat_cursors",
                  "_compat_new_texts", "_compat_all_new_texts", "_compat_await_one",
                  "_compat_finish", "_compat_harvest", "_compat_harvest_worker",
                  "_compat_watch_worker", "_compat_interview", "_compat_start_round",
@@ -1718,6 +1721,46 @@ def test_interview_falls_back_to_fast_pacing_when_channel_is_dead(tmp_path):
     assert __import__("time").time() - t0 < 5.0
     # 没答上就如实标，绝不替她填
     assert fake._compat.get(fake._compat_job["round_id"])["yui"] is None
+
+
+def test_our_own_push_is_never_taken_as_her_answer(tmp_path):
+    """**我们推出去的题目，绝不能被当成她的回答。**
+
+    真实事故：`ctx.bus.messages` 只给 `MESSAGE_PUSH`（往对话里推的消息流），
+    我们自己的题目就在里面；而题目正文自带「1 xxx 2 yyy 3 zzz 4 www」的选项编号，
+    解析器从中抠出"3 4"——于是面板把她答的题显示成**我推的题目原文**，
+    还标着"解析成选项 3/4"。9/10 题都是这么"答上"的。
+    """
+    cls = _plugin_cls()
+    compat = _load("_compat")
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
+    # 把真实的题目正文当成"她的话"喂进去
+    fake._compat_pushed = set()
+    for i, q in enumerate(qids, 1):
+        fake._compat_pushed.add(cls._compat_norm(
+            cls._compat_ask_text(None, i, len(qids), q)))
+    assert len(fake._compat_pushed) == len(qids)
+    assert all(fake._compat_is_our_push(t) for t in fake._compat_pushed)
+    # 题目标记也要挡住（万一原文没登记上）
+    assert fake._compat_is_our_push("默契测试 3/10：随便什么\n1 a 2 b 3 c 4 d")
+    # 她真答的话不许被挡
+    assert not fake._compat_is_our_push("本喵选1，猜主人2")
+    assert not fake._compat_is_our_push("3，1。本喵要自然醒没人吵")
+    assert fake._compat_is_our_push("") is True
+
+
+def test_interview_ignores_echoed_questions(tmp_path):
+    """端到端：把题目原文当"她的话"喂进总线，**一题都不许算答上**。"""
+    cls = _plugin_cls()
+    compat = _load("_compat")
+    qids = [q["id"] for q in compat.QUESTIONS[:10]]
+    echoes = [cls._compat_ask_text(None, i + 1, len(qids), q) for i, q in enumerate(qids)]
+    fake, pushed, _ = _interview_fake(cls, tmp_path, replies=echoes)
+    fake._compat_start_round(qids)
+    _wait_round(fake)
+    entry = fake._compat.get(fake._compat_job["round_id"])
+    assert entry["yui"] is None, "全是回显的题目，一题都不该算她答的"
+    assert fake._compat_job["status"] == "no_answer", fake._compat_job
 
 
 def test_interview_never_fabricates_when_she_stays_silent(tmp_path):

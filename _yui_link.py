@@ -486,24 +486,26 @@ def _record_text(raw: dict) -> str:
     return ""
 
 
-#: `get()` 的调用形状。挨个试，第一个能拿到东西的记下来（宿主没公开文档）。
+#: 每个命名空间要试的调用形状。挨个试，第一个能拿到东西的记下来（宿主没公开文档）。
 #: **优先带 timeout 的形状**——万一某个形状会把调用卡住，有超时至少不会冻住线程。
-_CALL_SHAPES: tuple[tuple[str, dict], ...] = (
-    ("messages", {"limit": 40, "timeout": 1.0}),
-    ("messages", {"max_count": 40, "timeout": 1.0}),
-    ("messages", {"timeout": 1.0}),
-    ("messages", {"limit": 40}),
-    ("messages", {"max_count": 40}),
-    ("messages", {}),
-    ("conversations", {"limit": 40, "timeout": 1.0}),
-    ("conversations", {"max_count": 40, "timeout": 1.0}),
-    ("conversations", {"limit": 40}),
-    ("conversations", {"max_count": 40}),
-    ("events", {"limit": 40, "timeout": 1.0}),
-    ("events", {"limit": 40}),
-    ("memory", {"limit": 40, "timeout": 1.0}),
-    ("memory", {"limit": 40}),
-)
+#: ⚠ `memory` 的签名是 `(*, bucket_id: str, limit=20, timeout=5.0)`，`bucket_id` 必填。
+_CALL_SHAPES: dict[str, tuple[dict, ...]] = {
+    "conversations": ({"limit": 40, "timeout": 1.0}, {"max_count": 40, "timeout": 1.0},
+                      {"limit": 40}, {"max_count": 40}, {}),
+    "messages": ({"limit": 40, "timeout": 1.0}, {"max_count": 40, "timeout": 1.0},
+                 {"limit": 40}, {"max_count": 40}, {}),
+    "events": ({"limit": 40, "timeout": 1.0}, {"limit": 40}, {}),
+    "lifecycle": ({"limit": 40, "timeout": 1.0}, {"limit": 40}, {}),
+    "memory": ({"bucket_id": "", "limit": 20, "timeout": 1.0},
+               {"bucket_id": "", "limit": 20}),
+}
+#: 查询顺序：**先 conversations**——她的回话属于"对话"，而 `messages` 实测只有
+#: `MESSAGE_PUSH`（往对话里推的消息流），插件自己的推送也在里面，不能当她的回答。
+_SPACE_ORDER = ("conversations", "messages", "events", "lifecycle", "memory")
+
+#: 这些 `type` 是"往对话里推的消息"，不是谁说的话——**绝不能当回答**。
+#: 实测 `ctx.bus.messages` 只给 `MESSAGE_PUSH`，而我们自己的题目推送就在其中。
+_PUSH_TYPES = frozenset({"message_push", "push", "proactive_message"})
 
 
 class YuiBus:
@@ -522,7 +524,7 @@ class YuiBus:
         self._round: list[str] = []               # 本轮开始以来收到的新话（给"补收"用）
         self._kinds: list[str] = []
         self._error = ""
-        self._shape = ""                          # 记下哪种调用形状管用
+        self._shapes: dict[str, str] = {}         # 命名空间 → 哪种调用形状管用
         self._last_count = 0
 
     # ── 找命名空间 ───────────────────────────────────────────
@@ -544,13 +546,13 @@ class YuiBus:
             sorted(n for n in dir(bus) if not n.startswith("_")))
         return False
 
-    def _fetch(self) -> list[dict]:
-        """按 _CALL_SHAPES 挨个试，返回第一份非空记录。"""
-        for attr, kwargs in _CALL_SHAPES:
-            space = self._space(attr)
-            fn = getattr(space, "get", None)
-            if not callable(fn):
-                continue
+    def _fetch_space(self, attr: str) -> list[dict]:
+        """调某个命名空间，返回它给的记录（dict 列表）。失败返回空。"""
+        space = self._space(attr)
+        fn = getattr(space, "get", None)
+        if not callable(fn):
+            return []
+        for kwargs in _CALL_SHAPES.get(attr, ({},)):
             try:
                 got = run_awaitable(fn(**kwargs))
             except TypeError:
@@ -560,15 +562,73 @@ class YuiBus:
                 continue
             rows = _as_dicts(got)
             if rows:
-                if not self._shape:
-                    self._shape = "%s.get(%s)" % (
+                if attr not in self._shapes:
+                    self._shapes[attr] = "%s.get(%s)" % (
                         attr, ", ".join("%s=%r" % kv for kv in kwargs.items()) or "")
                 return rows
         return []
 
+    def _fetch(self) -> list[dict]:
+        """**合并所有命名空间**的记录，并标注来源。
+
+        为什么不能"谁先有算谁"：`ctx.bus.messages` 实测只返回 `MESSAGE_PUSH`
+        （往对话里推的消息流，插件自己的推送也在里面），而她的回话在
+        `conversations` 上。先撞上 messages 就返回，会把**我们自己的题目**当成
+        她的回答——这个错真踩过：面板把她答的题显示成我推的题目原文，
+        「解析成选项 3/4」其实是从我题目的选项编号里抠出来的。
+        """
+        out: list[dict] = []
+        for attr in _SPACE_ORDER:
+            rows = self._fetch_space(attr)
+            for row in rows:
+                row = dict(row)
+                row["__space"] = attr
+                out.append(row)
+            if attr == "conversations":
+                # `conversations.get()` 多半只给"会话"本身。SDK 上还有
+                # `get_by_id(conversation_id, max_count, timeout)` 用来取会话里的
+                # 消息——她的回话很可能就在那儿，顺手拉一遍。
+                for row in self._fetch_in_conversations(rows):
+                    row["__space"] = "conversations.by_id"
+                    out.append(row)
+        return out
+
+    def _fetch_in_conversations(self, rows: list[dict]) -> list[dict]:
+        """按会话 id 再拉一层消息（`conversations.get_by_id`）。"""
+        space = self._space("conversations")
+        by_id = getattr(space, "get_by_id", None)
+        if not callable(by_id):
+            return []
+        out: list[dict] = []
+        ids: list[Any] = []
+        for row in rows[-3:]:                     # 只看最近几个会话，别乱翻历史
+            for key in ("conversation_id", "id", "key", "conv_id"):
+                value = row.get(key)
+                if value not in (None, "") and value not in ids:
+                    ids.append(value)
+                    break
+        for cid in ids:
+            for kwargs in ({"max_count": 40, "timeout": 1.0}, {}):
+                try:
+                    got = run_awaitable(by_id(cid, **kwargs))
+                except TypeError:
+                    try:
+                        got = run_awaitable(by_id(cid))   # 位置参数版本
+                    except Exception:
+                        break
+                except Exception:
+                    break
+                inner = _as_dicts(got)
+                if inner:
+                    if "conversations.by_id" not in self._shapes:
+                        self._shapes["conversations.by_id"] = "get_by_id(%r)" % cid
+                    out.extend(inner)
+                    break
+        return out
+
     # ── 对外 ────────────────────────────────────────────────
     def records(self, limit: int = 40) -> list[dict]:
-        """最近的一批记录，归一化成 ``{kind, text, role, ts}``。失败返回空。"""
+        """最近的一批记录，归一化成 ``{space, kind, role, text, ts}``。失败返回空。"""
         raw = self._fetch()
         out: list[dict] = []
         for payload in raw:
@@ -576,6 +636,7 @@ class YuiBus:
             if not text:
                 continue
             out.append({
+                "space": str(payload.get("__space") or ""),
                 "kind": str(payload.get("type") or payload.get("kind")
                             or payload.get("event") or "").strip(),
                 "role": str(payload.get("role") or payload.get("speaker")
@@ -624,6 +685,8 @@ class YuiBus:
         """她新说的话（排除用户侧，按出现顺序）。"""
         fresh: list[str] = []
         for rec in self.records(limit):
+            if rec["kind"].lower() in _PUSH_TYPES:
+                continue                    # 往对话里推的消息（含我们自己的题目）
             if rec["kind"] in _USER_SIDE_TYPES:
                 continue
             if rec["role"].lower() in _USER_SIDE_ROLES:
@@ -653,11 +716,44 @@ class YuiBus:
             info["reason"] = str(exc)
             return info
         info["records"] = len(recs)
-        info["shape"] = self._shape or "（还没试出可用形状）"
-        info["kinds"] = sorted({(r["kind"] + "/" + r["role"]).strip("/") for r in recs})
+        info["shapes"] = dict(self._shapes) or "（还没试出可用形状）"
+        info["shape"] = ",".join(sorted(self._shapes.values())) or "（还没试出可用形状）"
+        info["spaces"] = sorted({r["space"] for r in recs if r["space"]})
+        info["kinds"] = sorted({(r["space"] + ":" + r["kind"] + "/" + r["role"]).strip("/:")
+                                for r in recs})
         info["sample"] = [{"kind": r["kind"], "role": r["role"], "text": r["text"][:40]}
                           for r in recs[-3:]]
         return info
+
+
+def bus_probe(ctx: Any, name: str = "", *, sample: int = 2) -> str:
+    """把**每个**总线命名空间都真调一次，报告各自返回了什么。
+
+    宿主没有公开文档。实测教训：`ctx.bus.messages` 只返回 `MESSAGE_PUSH`（往对话里
+    推的消息流，插件自己的推送也在里面），而她的回话在 `conversations` 上——
+    "谁先有算谁"会把自己的题目当成她的回答。所以必须把每条通道都摊开看一眼，
+    把「命名空间 → 记录类型 + 样例」写进日志，一次就能定位。
+    """
+    bus = YuiBus(ctx, name)
+    parts: list[str] = []
+    for attr in _SPACE_ORDER:
+        space = bus._space(attr)
+        if space is None:
+            parts.append("%s：无" % attr)
+            continue
+        rows = bus._fetch_space(attr)
+        if not rows:
+            parts.append("%s：0 条" % attr)
+            continue
+        kinds: dict[str, int] = {}
+        for row in rows:
+            key = str(row.get("type") or row.get("kind") or row.get("event") or "?")
+            kinds[key] = kinds.get(key, 0) + 1
+        head = ",".join("%s×%d" % (k, v) for k, v in sorted(kinds.items())[:6])
+        keys = ",".join(sorted(str(k) for k in rows[0])[:12])
+        texts = [(_record_text(r) or "")[:26].replace("\n", " ") for r in rows[-int(sample or 2):]]
+        parts.append("%s：%d 条[%s] 字段{%s} 样例%s" % (attr, len(rows), head, keys, texts))
+    return "；".join(parts)
 
 
 def bus_report(ctx: Any) -> str:
