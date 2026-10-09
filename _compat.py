@@ -167,16 +167,61 @@ def validate_answers(question_ids: list[str], answers: Any) -> Optional[dict[str
     return {"own": own, "guess": guess}
 
 
-def classify_round(question_ids: list[str], self_a: dict, yui_a: dict) -> dict:
-    """揭晓计分：逐题对照 + 三项汇总 + 综合默契分。纯计算，方便测试。"""
+def classify_round(
+    question_ids: list[str],
+    self_a: dict,
+    yui_a: dict,
+    answered: Any = None,
+) -> dict:
+    """揭晓计分：逐题对照 + 三项汇总 + 综合默契分。纯计算，方便测试。
+
+    ``answered`` 给出**她真正答上来的题的下标**（缺省=全答）。这是必须的：
+    逐题面谈时她可能有一两题没接上，那些题**不进计分**（``total`` 只算答上的
+    题数、随机基线也只按答上的题算），并逐题标 ``skipped``。
+    拿没答上的题当"擦肩而过"，等于把沉默算成默契差——那是冤枉她。
+    """
+    total_all = len(question_ids)
+    if answered is None:
+        hit_idx = set(range(total_all))
+    else:
+        hit_idx = set()
+        for raw in answered:
+            try:
+                value = int(raw)
+            except Exception:
+                continue
+            if 0 <= value < total_all:
+                hit_idx.add(value)
+
     rows = []
     same = self_hit = yui_hit = 0
+    used: list[str] = []
     for i, qid in enumerate(question_ids):
         q = QUESTION_BY_ID.get(str(qid)) or {}
         so = int(self_a["own"][i])
         sg = int(self_a["guess"][i])
+        row = {
+            "id": qid,
+            "cat": q.get("cat"),
+            "cat_name": CATEGORIES.get(q.get("cat"), q.get("cat")),
+            "text": q.get("text", ""),
+            "options": list(q.get("options") or []),
+            "self_own": so,
+            "self_guess": sg,
+            "yui_own": None,
+            "yui_guess": None,
+            "tags": [],
+        }
+        if i not in hit_idx:
+            row["skipped"] = True
+            row["tags"] = ["她没答上（不计分）"]
+            rows.append(row)
+            continue
         yo = int(yui_a["own"][i])
         yg = int(yui_a["guess"][i])
+        row["yui_own"] = yo
+        row["yui_guess"] = yg
+        used.append(str(qid))
         tags = []
         if so == yo:
             same += 1
@@ -189,30 +234,35 @@ def classify_round(question_ids: list[str], self_a: dict, yui_a: dict) -> dict:
             tags.append("她懂你")
         if not tags:
             tags.append("擦肩而过")
-        rows.append({
-            "id": qid,
-            "cat": q.get("cat"),
-            "cat_name": CATEGORIES.get(q.get("cat"), q.get("cat")),
-            "text": q.get("text", ""),
-            "options": list(q.get("options") or []),
-            "self_own": so, "self_guess": sg,
-            "yui_own": yo, "yui_guess": yg,
-            "tags": tags,
-        })
-    total = len(question_ids) or 1
-    opts = mean_options(question_ids)
+        row["tags"] = tags
+        rows.append(row)
+
+    n = len(used)
+    if n <= 0:
+        return {
+            "same": 0, "self_hit": 0, "yui_hit": 0,
+            "total": 0, "scored": 0, "skipped": total_all,
+            "hits": 0, "chance_hits": 0.0,
+            "score": 0, "band": "她一道都没答上",
+            "rows": rows, "answered": [],
+        }
+    opts = mean_options(used)
     hits = same + self_hit + yui_hit
-    score = score_from_counts(same, self_hit, yui_hit, total, opts)
+    score = score_from_counts(same, self_hit, yui_hit, n, opts)
     return {
         "same": same,
         "self_hit": self_hit,
         "yui_hit": yui_hit,
-        "total": len(question_ids),
+        "total": n,                      # 只数她答上的题（历史和面板都按这个口径）
+        "scored": n,
+        "skipped": total_all - n,
         "hits": hits,
-        "chance_hits": round(chance_hits(question_ids), 2),
+        "chance_hits": round(chance_hits(used), 2),
         "score": score,
         "band": band_of(score),
         "rows": rows,
+        "answered": sorted(hit_idx),
+        "scored_ids": used,
     }
 
 
@@ -264,6 +314,9 @@ class CompatStore:
                 "self": None,
                 "yui": None,
                 "yui_source": "",
+                # 她逐题面谈时真正答上来的题下标。没答上的题在计分里剔除，
+                # 但**留档**——面板要如实显示"这题她没接上"。
+                "yui_answered": [],
                 "remembered": False,      # 是否已回写进猫娘的长期记忆（见 mark_remembered）
                 "result": None,
             }
@@ -279,10 +332,23 @@ class CompatStore:
     def set_self(self, round_id: str, answers: dict) -> Optional[dict]:
         return self._fill(round_id, "self", answers)
 
-    def set_yui(self, round_id: str, answers: dict, source: str) -> Optional[dict]:
-        return self._fill(round_id, "yui", answers, source=source)
+    def set_yui(
+        self,
+        round_id: str,
+        answers: dict,
+        source: str,
+        answered: Any = None,
+    ) -> Optional[dict]:
+        return self._fill(round_id, "yui", answers, source=source, answered=answered)
 
-    def _fill(self, round_id: str, side: str, answers: dict, source: str = "") -> Optional[dict]:
+    def _fill(
+        self,
+        round_id: str,
+        side: str,
+        answers: dict,
+        source: str = "",
+        answered: Any = None,
+    ) -> Optional[dict]:
         with self._lock:
             state = self._read()
             entry = self._find(state, round_id)
@@ -291,6 +357,10 @@ class CompatStore:
             entry[side] = {"own": list(answers["own"]), "guess": list(answers["guess"])}
             if side == "yui":
                 entry["yui_source"] = str(source or "")
+                entry["yui_answered"] = (
+                    list(range(len(entry["question_ids"])))
+                    if answered is None else [int(i) for i in answered]
+                )
             if entry.get("self") and entry.get("yui"):
                 entry["status"] = "ready"
             try:
@@ -311,7 +381,12 @@ class CompatStore:
                 return dict(entry)
             if entry.get("status") != "ready":
                 return dict(entry)
-            result = classify_round(entry["question_ids"], entry["self"], entry["yui"])
+            result = classify_round(
+                entry["question_ids"],
+                entry["self"],
+                entry["yui"],
+                entry.get("yui_answered"),
+            )
             entry["result"] = result
             entry["status"] = "revealed"
             entry["revealed_ts"] = int(time.time())
@@ -362,11 +437,13 @@ class CompatStore:
                 continue
             result = entry.get("result") or {}
             qids = [str(q) for q in (entry.get("question_ids") or [])]
-            total = int(result.get("total") or len(qids) or 1)
+            # 只按**她实际答上来的**那些题重算，与揭晓时的口径一致
+            scored = [str(q) for q in (result.get("scored_ids") or qids)]
+            total = int(result.get("total") or len(scored) or 1)
             same = int(result.get("same") or 0)
             self_hit = int(result.get("self_hit") or 0)
             yui_hit = int(result.get("yui_hit") or 0)
-            score = score_from_counts(same, self_hit, yui_hit, total, mean_options(qids))
+            score = score_from_counts(same, self_hit, yui_hit, total, mean_options(scored))
             rows.append({
                 "id": entry.get("id"),
                 "ts": entry.get("ts"),
@@ -376,8 +453,9 @@ class CompatStore:
                 "self_hit": self_hit,
                 "yui_hit": yui_hit,
                 "hits": same + self_hit + yui_hit,
-                "chance_hits": round(chance_hits(qids), 2),
+                "chance_hits": round(chance_hits(scored), 2),
                 "total": total,
+                "skipped": int(result.get("skipped") or 0),
                 "yui_source": entry.get("yui_source", ""),
             })
             if len(rows) >= limit:

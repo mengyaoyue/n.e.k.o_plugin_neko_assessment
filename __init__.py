@@ -80,6 +80,11 @@ _PREFS_DEFAULT = {
     "bg_dim": "medium",
 }
 
+# 默契测试：单条推送的硬上限（实测宿主的正文截断点约 200~300 字符，取保守值）
+_COMPAT_ASK_MAX_CHARS = 150
+_COMPAT_HINT = "回两个数字：①你自己选的 ②猜主人选的（编号从 1 开始）"
+_COMPAT_HINT_SHORT = "回两个数字：①你自己 ②猜主人"
+
 
 _mark('before-class')
 
@@ -106,14 +111,16 @@ class AssessmentPlugin(NekoPluginBase):
             # 默契测试：回合状态机 + YUI 后台作答任务
             self._compat: Optional[_compat.CompatStore] = None
             self._compat_job: dict[str, Any] = {"status": "idle", "round_id": "", "source": ""}
-            # 她回的原话（按回合存，揭晓时给面板看——这是"真的她在答"的证据）
+            # 她逐题的原话（按回合存，揭晓时给面板看——这是"真的她在答"的证据）
             self._compat_reply: dict[str, dict] = {}
-            # 每轮开问时的起始时间戳（只认这之后她说的新话）
-            self._compat_since_ts: dict[str, str] = {}
-            # 她的对话通道：None=还没建，False=定位不到，否则是 YuiDialog
+            # 逐题面谈的实时进度（面板要显示"她正在答第几题"，以及每题的原文/结果）
+            self._compat_progress: dict[str, dict] = {}
+            # 主读回通道（宿主记忆服务对话流）：None=还没建，False=建不起来
+            self._compat_feed: Any = None
+            # 备用通道：她的对话库；None=还没建，False=定位不到，否则是 YuiDialog
             self._yui_mem: Any = None
             self.yui_memory_dir: str = _UI_DEFAULTS["yui_memory_dir"]
-            # 后台线程（等她作答）的停止信号；shutdown 时置位
+            # 后台线程（逐题面谈）的停止信号；shutdown 时置位
             self._stop_event = threading.Event()
         except Exception:
             _dump_crash("init")
@@ -648,21 +655,52 @@ class AssessmentPlugin(NekoPluginBase):
         self.logger.info("[assessment] 本地音源导入：成功 {}，跳过 {}", saved, skipped)
         return saved, skipped
 
-    # ── 默契测试（你和 YUI 的默契度；机制复刻、题库自写）────────
-    # ── 默契测试：请她本人作答，再把她的回答读回来 ─────────────────
+    # ── 默契测试：请她本人逐题作答，再把她的回答读回来 ────────────────
     #
     # 为什么不是「把她的记忆注入 prompt、让模型替她答」：
     # 那样答话的是**插件**，只是套了她的人设和记忆——她既不知道自己在答题，
-    # 用的也不是她自己真实的对话上下文。现在的做法是：
+    # 用的也不是她自己真实的对话上下文。所以走宿主本来就会的能力：
     #   插件把题目推进对话（ai_behavior="respond"）→ 宿主用**她本人**
-    #   （人设 / 记忆 / 上下文）生成回复，屏幕上就是她在说话 →
-    #   宿主把这一轮写进 time_indexed.db → 插件按时间戳把她的回复读回来解析。
-    # 这样答案是她自己下的，而且她天然就记得——因为那就是她真实的对话。
-    _COMPAT_WAIT_SECONDS = 120.0        # 等她作答的最长时间
-    _COMPAT_POLL_SECONDS = 2.0
+    #   （人设 / 记忆 / 上下文）生成回复，屏幕上就是她在说话 → 插件读回来解析。
+    #
+    # ⚠ 一条血泪：**整卷一次推过去会被截断**
+    # 宿主对单条 `push_message` 的正文有 token 上限（`AGENT_CALLBACK_TEXT_MAX_TOKENS`
+    # 一族，值编译进主程序，磁盘上取不到）。实测把 700 字符的 10 题整卷推过去，
+    # 她亲口说「第三道你选项都没写完」——只拿到 Q1、Q2 全文和 Q3 的题干。
+    # 所以**改成一题一条**：每题一条 ≤ _COMPAT_ASK_MAX_CHARS 的短文，等她答完再发
+    # 下一题。长度由构造保证，不去赌宿主的上限到底是多少。
+    #
+    # ⚠ 第二条血泪：她**不会**吐 JSON。别让她交 `{"own":[...]}`，让她用自己的话
+    # 说两个编号，`_yui_link.parse_picks` 认数字/字母/选项原文；解析不出就算没答上。
+    #
+    # ⚠ 第三条血泪：读回**不能按时间戳**。`time_indexed.db` 是快照式写入，同一批
+    # 新增的多行**共享同一个时间戳**，`timestamp > since` 会读到用户那条、读漏她那条。
+    # 主通道改走宿主记忆服务的实时对话流，备用通道按自增 `id` 锚点读。
+    _COMPAT_ASK_MAX_CHARS = _COMPAT_ASK_MAX_CHARS   # 单条推送的硬上限（见模块级注释）
+    _COMPAT_PER_Q_WAIT = 75.0       # 等她为某一题开口的最长时间
+    _COMPAT_POLL_SECONDS = 1.5
+
+    # ── 读她的两条通道 ────────────────────────────────────────
+    def _char_name(self) -> str:
+        """她叫什么——问宿主，问不到用兜底。"""
+        try:
+            name = _yui_link.host_character_name()
+        except Exception:
+            name = ""
+        return name or "YUI"
+
+    def _yui_feed(self) -> Any:
+        """主通道：宿主记忆服务的实时对话流（懒建，连不上返回 None）。"""
+        if self._compat_feed is None:
+            try:
+                self._compat_feed = _yui_link.YuiFeed(self._char_name())
+            except Exception as exc:
+                self.logger.warning("[assessment] 建对话流通道失败：{}", exc)
+                self._compat_feed = False
+        return self._compat_feed or None
 
     def _yui_dialog(self) -> Any:
-        """她的对话通道（懒建）。定位不到就是 None——**如实回报，绝不猜一个路径硬用**。"""
+        """备用通道：她那本对话库（按自增 id 锚点读）。"""
         if self._yui_mem is None:
             try:
                 explicit = str(getattr(self, "yui_memory_dir", "") or "").strip()
@@ -674,41 +712,77 @@ class AssessmentPlugin(NekoPluginBase):
         return self._yui_mem or None
 
     def _yui_stats(self) -> dict:
+        """面板用的诊断：两条通道各自能不能用，如实报，不美化。"""
+        info: dict[str, Any] = {}
+        feed = self._yui_feed()
+        if feed is not None:
+            try:
+                info = feed.stats()
+            except Exception as exc:
+                info = {"available": False, "reason": str(exc)}
+        else:
+            info = {"available": False, "reason": "通道没建起来"}
         dlg = self._yui_dialog()
-        if dlg is None:
-            return {"available": False, "reason": "没定位到她的记忆目录"}
-        try:
-            return dlg.stats()
-        except Exception as exc:
-            return {"available": False, "reason": str(exc)}
+        if dlg is not None:
+            try:
+                db = dlg.stats()
+            except Exception as exc:
+                db = {"available": False, "reason": str(exc)}
+        else:
+            db = {"available": False, "reason": "没定位到她的记忆目录"}
+        info["db"] = db
+        info["db_available"] = bool(db.get("available"))
+        for key in ("yui_dir", "db_path"):
+            if db.get(key):
+                info[key] = db[key]
+        info["character"] = self._char_name()
+        return info
 
-    def _compat_ask_text(self, question_ids: list[str]) -> str:
-        """推给她的那段话：讲清玩法 + 题目 + 严格的输出格式。"""
-        lines = [
-            "主人想和你玩默契测试，要你先答一份喵。",
-            "每题选两个数字：先选**你自己**会选的那个，再猜**主人**会选哪个。序号从 0 开始。",
-            "答完只回一段 JSON，不要解释、不要多余的话，形如：",
-            '{"own": [0,1,2,...], "guess": [0,1,2,...]}',
-            "",
+    # ── 出题：一题一条短文，长度由构造保证 ────────────────────
+    def _compat_answer_hint(self) -> str:
+        return _COMPAT_HINT
+
+    def _compat_ask_text(self, index: int, total: int, question_id: str,
+                         limit: int | None = None) -> str:
+        """第 ``index`` 题的推送正文。**构造上保证不超过上限**，超了就逐级压缩。
+
+        ``limit`` 只留给测试显式指定；正常走类的 ``_COMPAT_ASK_MAX_CHARS``。
+        """
+        limit = int(limit or getattr(self, "_COMPAT_ASK_MAX_CHARS", 0)
+                    or _COMPAT_ASK_MAX_CHARS)
+        pub = _compat.question_public(question_id) or {}
+        options = [str(o) for o in (pub.get("options") or [])]
+        text = str(pub.get("text") or "")
+        lead = "" if int(index) > 1 else "主人要和你玩默契测试，要你亲自答喵。\n"
+        head = f"{lead}默契测试 {index}/{total}：{text}"
+        labels_full = [f"{j + 1} {o}" for j, o in enumerate(options)]
+        labels_short = [
+            f"{j + 1} {(o[:6] + '…') if len(o) > 7 else o}" for j, o in enumerate(options)
         ]
-        for i, qid in enumerate(question_ids, 1):
-            pub = _compat.question_public(qid) or {}
-            opts = "；".join(f"{j}.{o}" for j, o in enumerate(pub.get("options") or []))
-            lines.append(f"{i}. {pub.get('text', '')} 选项：{opts}")
-        lines.append("")
-        lines.append(f"一共 {len(question_ids)} 题，own 和 guess 各要 {len(question_ids)} 个数字。")
-        return "\n".join(lines)
+        for labels, hint in (
+            (labels_full, _COMPAT_HINT),
+            (labels_short, _COMPAT_HINT),
+            (labels_short, _COMPAT_HINT_SHORT),
+        ):
+            out = "\n".join([head, "　".join(labels), hint])
+            if len(out) <= limit:
+                return out
+        tail = "\n".join(["", "　".join(labels_short), _COMPAT_HINT_SHORT])
+        short_head = f"默契测试 {index}/{total}："
+        keep = max(6, limit - len(tail) - len(short_head))
+        return "\n".join([short_head + text[:keep], "　".join(labels_short), _COMPAT_HINT_SHORT])
 
-    def _compat_push_now(self, question_ids: list[str]) -> None:
-        """把题目推进对话，请她本人作答。失败要抛出去，让面板如实显示。"""
-        text = self._compat_ask_text(question_ids)
+    def _compat_push_text(self, text: str, description: str) -> None:
+        """把一段话推进对话，请她本人回应。失败要抛出去，让面板如实显示。"""
+        if len(text) > self._COMPAT_ASK_MAX_CHARS * 3:
+            raise ValueError(f"推送正文过长（{len(text)} 字符），拒绝发送")
         result = self.ctx.push_message(
             source=_PLUGIN_ID,
             visibility=["chat"],
             ai_behavior="respond",
             parts=[{"type": "text", "text": text}],
             priority=5,
-            metadata={"description": "🐾 默契测试：请 YUI 本人作答"},
+            metadata={"description": description},
         )
         if asyncio.iscoroutine(result):
             loop = asyncio.new_event_loop()
@@ -717,74 +791,205 @@ class AssessmentPlugin(NekoPluginBase):
             finally:
                 loop.close()
 
-    def _compat_since(self, dlg: Any) -> str:
-        """本次要盯的起始时间戳：库里最新一条；取不到就用本机当前时间。"""
-        if dlg is not None:
+    # ── 读回：对话流优先，对话库兜底 ──────────────────────────
+    def _compat_cursors(self) -> tuple[dict, int]:
+        """推题**之前**记下游标；两条通道各记一份，读回时谁先有算谁。"""
+        snap: dict = {}
+        feed = self._yui_feed()
+        if feed is not None:
             try:
-                got = dlg.latest_ts()
-                if got:
-                    return str(got)
+                snap = feed.snapshot()
+            except Exception:
+                snap = {}
+        mark = 0
+        dlg = self._yui_dialog()
+        if dlg is not None and dlg.available:
+            try:
+                mark = dlg.mark()
+            except Exception:
+                mark = 0
+        return snap, mark
+
+    def _compat_new_texts(self, snap: dict, mark: int) -> list[tuple[str, str]]:
+        """她相对游标新说的话：``[(原文, 通道)]``。对话流有结果就不再看库。"""
+        out: list[tuple[str, str]] = []
+        feed = self._yui_feed()
+        if feed is not None:
+            try:
+                out.extend((t, "对话流") for t in feed.new_her_turns(snap))
             except Exception:
                 pass
-        return time.strftime("%Y-%m-%d %H:%M:%S")
-
-    def _compat_watch_worker(self, round_id: str) -> None:
-        """后台线程：请她作答 → 等她回答 → 从她的对话库里读回来解析。"""
-        try:
-            entry = self._compat.get(round_id)
-            if not entry:
-                return
-            qids = entry["question_ids"]
+        if not out:
             dlg = self._yui_dialog()
-            since = self._compat_since(dlg)
-            self._compat_since_ts[round_id] = since
+            if dlg is not None and dlg.available:
+                try:
+                    out.extend((row["text"], "对话库") for row in dlg.new_replies(mark))
+                except Exception:
+                    pass
+        seen: set[str] = set()
+        uniq: list[tuple[str, str]] = []
+        for text, channel in out:
+            if text and text not in seen:
+                seen.add(text)
+                uniq.append((text, channel))
+        return uniq
 
-            try:
-                self._compat_push_now(qids)
-            except Exception as exc:
-                self.logger.warning("[assessment] 把题目推给她失败：{}", traceback.format_exc())
-                self._compat_job = {"status": "push_failed", "round_id": round_id,
-                                    "source": "", "reason": f"{exc}"}
+    def _compat_await_one(self, question_id: str, index: int, total: int,
+                          deadline: float) -> tuple[list[int], str, str]:
+        """把这一题发过去，等她交出两个编号。
+
+        返回 ``(picks, 原文, 通道)``；没等到就是 ``([], 最后看到的话, 通道)``。
+        **解析不出就是没答上**——绝不替她补一个。
+        """
+        pub = _compat.question_public(question_id) or {}
+        options = [str(o) for o in (pub.get("options") or [])]
+        n_options = max(2, len(options))
+        snap, mark = self._compat_cursors()
+        self._compat_push_text(
+            self._compat_ask_text(index, total, question_id),
+            f"🐾 默契测试 第 {index}/{total} 题",
+        )
+        last_text = ""
+        last_channel = ""
+        while time.time() < deadline:
+            stop = getattr(self, "_stop_event", None)
+            if stop is not None and stop.is_set():
+                return [], last_text, last_channel
+            for text, channel in self._compat_new_texts(snap, mark):
+                last_text, last_channel = text, channel
+                picks = _yui_link.parse_picks(text, n_options, 2, options)
+                if picks:
+                    return picks, text, channel
+            if stop is not None:
+                stop.wait(self._COMPAT_POLL_SECONDS)
+            else:
+                time.sleep(self._COMPAT_POLL_SECONDS)
+        return [], last_text, last_channel
+
+    # ── 面谈调度 ─────────────────────────────────────────────
+    def _compat_finish(self, round_id: str) -> None:
+        """把这一轮的作答落库（没答上的题留 None，下标记进 yui_answered）。"""
+        prog = self._compat_progress.get(round_id) or {}
+        items = prog.get("items") or []
+        entry = self._compat.get(round_id)
+        if entry is None:
+            return
+        own: list[Any] = []
+        guess: list[Any] = []
+        answered: list[int] = []
+        for i, item in enumerate(items):
+            picks = item.get("picks") or []
+            if len(picks) == 2:
+                own.append(int(picks[0]))
+                guess.append(int(picks[1]))
+                answered.append(i)
+            else:
+                own.append(None)
+                guess.append(None)
+        if not answered:
+            self._compat_job = {
+                "status": "no_answer", "round_id": round_id, "source": "",
+                "reason": "她一句带编号的话都没说上来，这一轮不算她的成绩",
+            }
+            prog["status"] = "no_answer"
+            return
+        self._compat.set_yui(round_id, {"own": own, "guess": guess}, "herself", answered)
+        self._compat_job = {"status": "done", "round_id": round_id, "source": "herself"}
+        prog["status"] = "done"
+        raw = [it.get("raw") or "" for it in items if it.get("raw")]
+        self._compat_reply[round_id] = {
+            "text": "\n\n".join(raw),
+            "ts": time.strftime("%H:%M:%S"),
+            "answered": len(answered),
+            "total": len(items),
+        }
+        self.logger.info("[assessment] 她自己答完了默契测试：{}（{}/{} 题）",
+                         round_id, len(answered), len(items))
+
+    def _compat_interview(self, round_id: str, question_ids: list[str],
+                          only: list[int] | None = None) -> None:
+        """后台线程：一题一条地问，等她答完再问下一题。"""
+        try:
+            prog = self._compat_progress.get(round_id)
+            if not isinstance(prog, dict):
                 return
-
-            if dlg is None or not dlg.available:
-                self._compat_job = {"status": "no_dialog", "round_id": round_id, "source": "",
-                                    "reason": (dlg.source if dlg else "没定位到她的记忆目录")}
-                return
-            self._compat_job = {"status": "asking", "round_id": round_id, "source": "herself"}
-
-            deadline = time.time() + self._COMPAT_WAIT_SECONDS
-            while time.time() < deadline:
+            items = prog.get("items") or []
+            total = len(question_ids)
+            todo = list(range(total)) if not only else [i for i in only if 0 <= i < total]
+            for i in todo:
                 stop = getattr(self, "_stop_event", None)
                 if stop is not None and stop.is_set():
+                    prog["status"] = "stopped"
                     return
-                got = dlg.find_answers(since, want=len(qids))
-                if got:
-                    self._compat.set_yui(
-                        round_id, {"own": got["own"], "guess": got["guess"]}, "herself")
-                    self._compat_reply[round_id] = {"text": got["reply"], "ts": got["ts"]}
-                    self._compat_job = {"status": "done", "round_id": round_id, "source": "herself"}
-                    self.logger.info("[assessment] 她自己答完了默契测试：{}", round_id)
-                    return
-                if stop is not None:
-                    stop.wait(self._COMPAT_POLL_SECONDS)
+                qid = str(question_ids[i])
+                while len(items) <= i:                     # 兜底，别让下标越界
+                    items.append({"i": len(items) + 1, "state": "pending"})
+                item = items[i]
+                item["i"] = i + 1
+                item["qid"] = qid
+                item["state"] = "asking"
+                prog["index"] = i + 1
+                prog["status"] = "asking"
+                picks, raw, channel = self._compat_await_one(
+                    qid, i + 1, total, time.time() + self._COMPAT_PER_Q_WAIT)
+                if picks:
+                    item["state"] = "ok"
+                    item["picks"] = picks
+                    prog["answered"] = int(prog.get("answered") or 0) + 1
                 else:
-                    time.sleep(self._COMPAT_POLL_SECONDS)
-
-            self._compat_job = {"status": "timeout", "round_id": round_id, "source": "",
-                                "reason": f"等了 {int(self._COMPAT_WAIT_SECONDS)} 秒没等到她的回复"}
+                    item["state"] = "skipped"
+                    item["picks"] = []
+                    item["reason"] = "她没说清两个编号" if raw else "她没开口"
+                item["raw"] = raw
+                item["channel"] = channel
+                items[i] = item
+                prog["items"] = items
+            prog["index"] = total
+            self._compat_finish(round_id)
         except Exception as exc:
-            self.logger.warning("[assessment] 等她作答的线程异常：{}", traceback.format_exc())
-            self._compat_job = {"status": "error", "round_id": round_id, "source": f"{exc}"}
+            self.logger.warning("[assessment] 逐题面谈线程异常：{}", traceback.format_exc())
+            prog = self._compat_progress.get(round_id)
+            if isinstance(prog, dict):
+                prog["status"] = "error"
+                prog["reason"] = str(exc)
+            self._compat_job = {"status": "error", "round_id": round_id, "source": str(exc)}
 
-    def _compat_start_round(self, question_ids: list[str]) -> dict:
-        round_id = uuid.uuid4().hex[:10]
-        entry = self._compat.start_round(round_id, question_ids)
+    def _compat_start_round(self, question_ids: list[str], *,
+                            only: list[int] | None = None,
+                            round_id: str = "") -> dict:
+        if round_id:
+            entry = self._compat.get(round_id) or {}
+        else:
+            round_id = uuid.uuid4().hex[:10]
+            entry = self._compat.start_round(round_id, question_ids)
+        prog = self._compat_progress.get(round_id)
+        if not isinstance(prog, dict):
+            prog = {
+                "round_id": round_id,
+                "total": len(question_ids),
+                "index": 0,
+                "status": "asking",
+                "answered": 0,
+                "items": [{"i": i + 1, "qid": str(q), "state": "pending"}
+                          for i, q in enumerate(question_ids)],
+                "reason": "",
+            }
+            self._compat_progress[round_id] = prog
+        else:
+            for i in (only or []):
+                if 0 <= i < len(prog.get("items") or []):
+                    prog["items"][i]["state"] = "pending"
+                    prog["items"][i]["picks"] = []
+            prog["status"] = "asking"
+            prog["reason"] = ""
         self._compat_job = {"status": "asking", "round_id": round_id, "source": "herself"}
-        threading.Thread(target=self._compat_watch_worker, args=(round_id,),
-                         daemon=True, name="neko-assess-compat").start()
+        threading.Thread(
+            target=self._compat_interview, args=(round_id, question_ids, only),
+            daemon=True, name="neko-assess-compat",
+        ).start()
         return entry
 
+    # ── 接口 ─────────────────────────────────────────────────
     def _api_compat(self, body: dict) -> dict:
         """默契测试：开回合 / 交卷 / 揭晓 / 重问 / 历史。双方交卷前绝不返回她的答案。"""
         if self._compat is None:
@@ -798,11 +1003,12 @@ class AssessmentPlugin(NekoPluginBase):
             return {
                 "ok": True,
                 "round": {
-                    "id": entry["id"],
+                    "id": entry.get("id"),
                     "questions": [_compat.question_public(q) for q in qids],
                 },
                 "job": dict(self._compat_job),
-                "note": "题目已经发给她了，她会用自己的身份在对话里回答；你在这边同时答你的。",
+                "progress": dict(self._compat_progress.get(entry.get("id")) or {}),
+                "note": "题目一题一条发给她，她在对话里用自己的话答；你在这边同时答你的。",
             }
 
         if action == "ask_again":
@@ -810,13 +1016,19 @@ class AssessmentPlugin(NekoPluginBase):
             entry = self._compat.get(round_id)
             if entry is None:
                 return {"ok": False, "error": "没有找到这一轮，可能已经换新一轮了。"}
-            if entry.get("yui"):
-                return {"ok": True, "status": entry["status"], "job": dict(self._compat_job),
-                        "note": "她已经答过了。"}
-            self._compat_job = {"status": "asking", "round_id": round_id, "source": "herself"}
-            threading.Thread(target=self._compat_watch_worker, args=(round_id,),
-                             daemon=True, name="neko-assess-compat").start()
-            return {"ok": True, "job": dict(self._compat_job), "note": "又问她了一次。"}
+            prog = self._compat_progress.get(round_id)
+            prog = prog if isinstance(prog, dict) else {}
+            missing = [i for i, it in enumerate(prog.get("items") or [])
+                       if not (it.get("picks") or [])]
+            if not missing:
+                self._compat_start_round(entry["question_ids"], round_id=round_id)
+                return {"ok": True, "job": dict(self._compat_job),
+                        "note": "她说过的都记着，整轮重问了一遍。",
+                        "progress": dict(self._compat_progress.get(round_id) or {})}
+            self._compat_start_round(entry["question_ids"], only=missing, round_id=round_id)
+            return {"ok": True, "job": dict(self._compat_job),
+                    "note": f"只重问没答上的 {len(missing)} 题。",
+                    "progress": dict(self._compat_progress.get(round_id) or {})}
 
         if action == "submit":
             round_id = str(payload.get("round_id") or "").strip()
@@ -829,34 +1041,41 @@ class AssessmentPlugin(NekoPluginBase):
             entry = self._compat.set_self(round_id, answers)
             if entry is None:
                 return {"ok": False, "error": "这一轮已经结束了，重新开一轮吧。"}
-            return {"ok": True, "status": entry["status"], "job": dict(self._compat_job)}
+            return {"ok": True, "status": entry["status"], "job": dict(self._compat_job),
+                    "progress": dict(self._compat_progress.get(round_id) or {})}
 
         if action == "reveal":
             round_id = str(payload.get("round_id") or "").strip()
+            prog = dict(self._compat_progress.get(round_id) or {})
             entry = self._compat.reveal(round_id)
             if entry is None:
                 return {"ok": False, "error": "没有找到这一轮。"}
             if entry.get("status") != "revealed":
-                # 双方没交齐：只说在等，不给任何答案
+                # 双方没交齐：只说进度，不给任何答案
                 return {"ok": True, "status": "waiting", "job": dict(self._compat_job),
+                        "progress": prog,
                         "yui_answered": bool(entry.get("yui"))}
             return {
                 "ok": True,
                 "status": "revealed",
                 "round_id": round_id,
                 "yui_source": entry.get("yui_source") or "",
-                # 她原话。面板会把它显示出来——这是"真的她在答"最直接的证据
+                # 她逐题的原话。面板会显示出来——这是"真的她在答"最直接的证据
                 "yui_reply": self._compat_reply.get(round_id) or {},
                 "result": entry["result"],
                 "job": dict(self._compat_job),
+                "progress": prog,
             }
 
         return {
             "ok": True,
             "history": self._compat.history(),
             "job": dict(self._compat_job),
+            "progress": dict(self._compat_progress.get(
+                str(self._compat_job.get("round_id") or "")) or {}),
             "memory": self._yui_stats(),
         }
+
     # ── 猫娘塔罗 ───────────────────────────────────────────────
     _TAROT_SYSTEM = (
         "你是猫娘塔罗解读师，用猫娘口吻解读塔罗牌。规则："

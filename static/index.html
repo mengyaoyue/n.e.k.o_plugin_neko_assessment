@@ -364,6 +364,15 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
 .cm-pair{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:var(--fs-sm);color:var(--ink2)}
 .cm-pair b{color:#3a3260;font-weight:600}
 .cm-pair .hit{color:var(--ok)}
+.cm-pair .miss{color:var(--dim);font-weight:500}
+.cm-tag.miss{background:rgba(224,100,95,.12);color:#b4433e}
+.framebox.skipped{background:rgba(255,255,255,.42);border-style:dashed}
+/* 逐题面谈的实时进度：她说了什么 + 解析成什么，走一题记一题 */
+.cml{margin-top:12px;display:flex;flex-direction:column;gap:8px}
+.cml:empty{margin-top:0}
+.cml-row{background:rgba(255,255,255,.6);border:1px solid var(--line);border-radius:12px;padding:9px 12px}
+.cml-h{font-family:var(--font-ui);font-size:var(--fs-sm);color:#3a3260}
+.cml-raw{margin-top:5px;font-size:var(--fs-sm);color:var(--ink2);line-height:1.7;white-space:pre-wrap}
 @media (max-width:640px){.cm-pair{grid-template-columns:1fr}}
 
 @media (max-width:820px){
@@ -694,8 +703,9 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
         <div class="card hidden" id="cm-wait">
           <h2>交卷了 <span class="muted" style="font-size:var(--fs-xs)">你已交卷，等她</span></h2>
           <div class="muted" id="cm-wait-text">正在等她用自己的身份回答…</div>
+          <div id="cm-live" class="cml"></div>
           <div class="row" style="margin-top:10px">
-            <button class="ghost tiny hidden" id="cm-ask-again">再问她一次</button>
+            <button class="ghost tiny hidden" id="cm-ask-again">把没答上的重问一次</button>
           </div>
         </div>
 
@@ -708,6 +718,7 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
           </div>
           <div class="stats" id="cm-stats"></div>
           <div id="cm-yui-said" class="notice" style="margin-top:12px"></div>
+          <div id="cm-live-reveal" class="cml"></div>
           <div class="hr"></div>
           <div id="cm-rows"></div>
           <div class="row" style="margin-top:12px">
@@ -3340,20 +3351,25 @@ function cmStage(name){
 }
 
 function cmSetMemoryBox(res){
-  // 她的对话库定位 + 能不能读回她的回答。定位不到要如实说，并给出可手填的地方
+  // 读她的两条通道。**如实报**：哪条通、哪条不通，不通就直说读不回来
   const mem = (res && res.memory) || {};
   const box = $('cm-yui-memory');
   if (!box) return;
+  const db = mem.db || {};
+  const feedOk = !!mem.available && !db.available;      // 只有对话流通
+  const parts = [];
   if (mem.available){
-    box.className = 'notice good';
-    box.innerHTML = `能读到她在对话里说的话（${esc(mem.source || '自动定位')}）：`
-      + `<b>${mem.messages || 0}</b> 条记录，最后一条 ${esc(mem.latest || '—')}。`
-      + `${mem.yui_dir ? '<br>路径：' + esc(mem.yui_dir) : ''}`;
+    parts.push(`主通道（宿主对话流）：能用，看到 <b>${mem.messages || 0}</b> 条对话`
+      + `（其中她说 <b>${mem.her_messages || 0}</b> 条）。`);
   } else {
-    box.className = 'notice bad';
-    box.textContent = `⚠ 读不到她的对话库（${mem.reason || '未定位到'}）——`
-      + `那样她答了题我们也读不回来。可以在下面手填她的记忆目录。`;
+    parts.push(`主通道（宿主对话流）：<b>连不上</b>（${esc(mem.reason || '未就绪')}）。`);
   }
+  parts.push(db.available
+    ? `备用通道（她的对话库）：能读（${esc(db.yui_dir || '已定位')}，${db.messages || 0} 条）。`
+    : `备用通道（她的对话库）：读不到（${esc(db.reason || '未定位到')}）。`);
+  box.className = 'notice' + (mem.available ? ' good' : ' bad');
+  box.innerHTML = parts.join('<br>')
+    + (mem.available ? '' : '<br>两条都不通的话，她答了题我们也读不回来。');
   const input = $('cfg-yui-dir');
   if (input && !input.value) input.value = (res && res.yui_memory_dir) || '';
 }
@@ -3453,16 +3469,26 @@ async function cmSubmit(){
   } catch (err){ $('cm-wait-text').textContent = String(err); }
 }
 
-function cmWaitText(job, answered){
+function cmWaitText(job, answered, progress){
   const j = job || {};
+  const p = progress || {};
+  const total = Number(p.total || 0);
+  const done = Number(p.answered || 0);
+  const at = Number(p.index || 0);
+  const tail = total
+    ? `（进度：她正在答第 ${Math.max(at, 1)}/${total} 题，已答上 ${done} 题）`
+    : '';
   if (answered) return '她答完了，正在对答案…';
   switch (j.status){
-    case 'asking':      return '题目已经发给她了，正在等她用自己的身份回答…（她会在对话里说话）';
-    case 'timeout':     return `等了很久她还没答上来（${j.reason || ''}）。可以点下面「再问她一次」。`;
-    case 'no_dialog':   return `读不到她的对话库，所以她答了也读不回来（${j.reason || ''}）。`;
+    // 逐题面谈是**一题一条**发过去、等她答完再发下一题，所以这里要说清进度，
+    // 不然一等等几分钟、面板又只说"正在等"，看起来像卡死了。
+    case 'asking':      return `题目一题一条发给她了，正在等她用自己的话答…（她会在对话里说话）${tail}`;
+    case 'timeout':     return `等了很久她还没答上来（${j.reason || ''}）。${tail}`;
+    case 'no_answer':   return `她一句带编号的话都没说上来（${j.reason || ''}）。${tail}`;
+    case 'no_dialog':   return `两条读回通道都不通，所以她答了也读不回来（${j.reason || ''}）。`;
     case 'push_failed': return `题目没推给她：${j.reason || ''}`;
     case 'error':       return `出错了：${j.reason || ''}`;
-    default:            return '正在等她作答…';
+    default:            return `正在等她作答…${tail}`;
   }
 }
 
@@ -3474,13 +3500,40 @@ async function cmPollReveal(){
       $('cm-wait-text').textContent = res.error || '揭晓失败';
       return;
     }
-    $('cm-wait-text').textContent = cmWaitText(res.job, res.yui_answered);
-    const stuck = res.job && ['timeout', 'no_dialog', 'push_failed', 'error'].includes(res.job.status);
+    $('cm-wait-text').textContent = cmWaitText(res.job, res.yui_answered, res.progress);
+    const st = (res.job && res.job.status) || '';
+    const stuck = ['timeout', 'no_answer', 'no_dialog', 'push_failed', 'error'].includes(st);
     $('cm-ask-again').classList.toggle('hidden', !stuck);
-    if (res.status === 'waiting') return;      // 她还没交卷，下轮再问
+    if (res.status === 'waiting'){
+      cmRenderLive(res.progress, 'cm-live');   // 等待中才往等待卡里刷进度
+      return;                                  // 她还没交卷，下轮再问
+    }
     clearInterval(cmTimer); cmTimer = null;
     cmRenderReveal(res);
   } catch (err){ /* 下轮再试 */ }
+}
+
+function cmRenderLive(progress, target){
+  // 逐题面谈的实时进度：每题一条，写清"她说了什么 / 解析成什么"
+  const box = $(target || 'cm-live');
+  if (!box) return;
+  const items = (progress && progress.items) || [];
+  if (!items.length){ box.innerHTML = ''; return; }
+  box.innerHTML = items.map((it) => {
+    const i = Number(it.i || 0);
+    const state = it.state || 'pending';
+    const label = state === 'ok' ? '<b class="hit">答上了</b>'
+      : state === 'asking' ? '<b>正在答…</b>'
+      : state === 'skipped' ? '<b class="miss">没答上</b>'
+      : '<b class="muted">待问</b>';
+    const picks = (it.picks || []).map((n) => Number(n) + 1).join(' / ');
+    const raw = (it.raw || '').trim();
+    return `<div class="cml-row">
+      <div class="cml-h">第 ${i} 题 ${label}${picks ? `　解析成选项 ${esc(picks)}` : ''}</div>
+      ${raw ? `<div class="cml-raw">她说：${esc(raw).replace(/\n/g, '<br>')}</div>`
+            : (state === 'skipped' && it.reason ? `<div class="cml-raw muted">${esc(it.reason)}</div>` : '')}
+    </div>`;
+  }).join('');
 }
 
 $('cm-ask-again').onclick = async () => {
@@ -3496,25 +3549,29 @@ $('cm-ask-again').onclick = async () => {
 
 function cmRenderReveal(res){
   const r = res.result || {};
+  const skipped = Number(r.skipped || 0);
   $('cm-score').textContent = `净默契分 ${r.score}`;
   $('cm-summary').textContent =
     `${r.band}。合计命中 ${r.hits} 次（随机水平约 ${r.chance_hits} 次）——` +
-    `选择一致 ${r.same} 题，你猜中她 ${r.self_hit} 题，她猜中你 ${r.yui_hit} 题。`;
+    `选择一致 ${r.same} 题，你猜中她 ${r.self_hit} 题，她猜中你 ${r.yui_hit} 题。` +
+    `计分只算她真答上来的 ${r.total} 题` +
+    (skipped ? `；另有 ${skipped} 题她没接上，没算进分里。` : '。');
   const mine = res.yui_source === 'herself';
   $('cm-source').textContent = mine
-    ? 'YUI 本人作答（她收到的题目 + 她自己回的原话，见下）'
+    ? 'YUI 本人逐题作答（她收到的题 + 她自己回的原话，见下）'
     : (res.yui_source ? `来源：${res.yui_source}` : '来源未知');
   const rep = res.yui_reply || {};
   const box = $('cm-yui-said');
   if (box){
     if (rep.text){
       box.className = 'tbubble';
-      box.textContent = `她在对话里回的原话（${esc(rep.ts || '')}）：\n${rep.text}`;
+      box.textContent = `她在对话里回的原话（答上 ${rep.answered || '?'} / ${rep.total || '?'} 题）：\n${rep.text}`;
     } else {
       box.className = 'notice';
       box.textContent = '没拿到她回的原话——这一轮的记录不在了，所以无法核实她当时是怎么说的。';
     }
   }
+  cmRenderLive(res.progress, 'cm-live-reveal');
   $('cm-stats').innerHTML = `
     <div class="stat"><b>${r.same}</b><span>心意相通</span></div>
     <div class="stat"><b>${r.self_hit}</b><span>你懂她</span></div>
@@ -3522,7 +3579,23 @@ function cmRenderReveal(res){
     <div class="stat"><b>${r.hits}</b><span>命中合计<br>随机水平 ${r.chance_hits}</span></div>
     <div class="stat"><b>${r.score}</b><span>净默契分</span></div>`;
   $('cm-rows').innerHTML = (r.rows || []).map((row, i) => {
-    const opt = (idx) => esc(row.options[idx] || '—');
+    const opt = (idx) => (idx === null || idx === undefined) ? '—' : esc(row.options[idx] || '—');
+    if (row.skipped){
+      // 她没接上的题：如实标出来，不硬凑一个答案、也不当"擦肩而过"扣分
+      return `<div class="framebox skipped">
+        <div class="fb-top">
+          <div class="fb-name">${i + 1}. ${esc(row.text)}</div>
+          <div class="fb-val">${esc(row.cat_name)}</div>
+        </div>
+        <div class="cm-pair">
+          <div>你选：<b>${opt(row.self_own)}</b></div>
+          <div>她选：<b class="miss">没答上</b></div>
+          <div>你猜她：<b>${opt(row.self_guess)}</b></div>
+          <div>她猜你：<b class="miss">没答上</b></div>
+        </div>
+        <div class="fb-tip"><span class="cm-tag miss">未计分</span></div>
+      </div>`;
+    }
     const sameOwn = row.self_own === row.yui_own;
     return `<div class="framebox">
       <div class="fb-top">

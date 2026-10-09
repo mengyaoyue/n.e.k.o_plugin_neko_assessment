@@ -1024,35 +1024,43 @@ def test_compat_store_state_machine(tmp_path):
 def test_api_compat_actions(tmp_path):
     cls = _plugin_cls()
 
-    asked = []
-
     class Fake:
         data_dir = tmp_path
         _compat = _load("_compat").CompatStore(tmp_path / "compat.json")
         _compat_job = {"status": "idle", "round_id": "", "source": ""}
         _compat_reply = {}
-        _compat_since_ts = {}
+        _compat_progress = {}
 
         def _yui_stats(self):
             return {"available": True, "messages": 42}
 
-        def _compat_start_round(self, question_ids):
-            # 测试里不进程推给她：直接造一个"她已答完"的回合
-            rid = "r-test"
-            self._compat.start_round(rid, question_ids)
-            self._compat.set_yui(rid, {"own": [0] * len(question_ids),
-                                       "guess": [1] * len(question_ids)}, "herself")
-            self._compat_reply[rid] = {"text": '{"own": [...], "guess": [...]}', "ts": "2026-10-09 20:00:00"}
+        def _compat_start_round(self, question_ids, *, only=None, round_id=""):
+            # 测试里不真的推给她：直接造一个"她已答完"的回合
+            rid = round_id or "r-test"
+            if not round_id:
+                self._compat.start_round(rid, question_ids)
+                self._compat_progress[rid] = {
+                    "round_id": rid, "total": len(question_ids), "index": len(question_ids),
+                    "status": "done", "answered": len(question_ids),
+                    "items": [{"i": i + 1, "qid": q, "state": "ok", "picks": [0, 1],
+                               "raw": "1 2"} for i, q in enumerate(question_ids)],
+                    "reason": "",
+                }
+            self._compat.set_yui(rid,
+                                 {"own": [0] * len(question_ids),
+                                  "guess": [1] * len(question_ids)},
+                                 "herself", list(range(len(question_ids))))
+            self._compat_reply[rid] = {"text": "1 2\n2 3", "ts": "20:00:00",
+                                       "answered": len(question_ids),
+                                       "total": len(question_ids)}
             self._compat_job = {"status": "done", "round_id": rid, "source": "herself"}
             return self._compat.get(rid)
-
-        def _compat_ask_again(self, rid):     # 只记录，不真的重问
-            asked.append(rid)
 
     fake = Fake()
     res = cls._api_compat(fake, {"action": "start"})
     assert res["ok"] and len(res["round"]["questions"]) == 10
     assert "发给她" in res["note"], res["note"]
+    assert res["progress"]["answered"] == 10, "面板要拿得到逐题进度"
     rid = res["round"]["id"]
     # 没交卷就揭晓 → waiting，且响应里不含任何答案
     res = cls._api_compat(fake, {"action": "reveal", "round_id": rid})
@@ -1067,10 +1075,14 @@ def test_api_compat_actions(tmp_path):
     # 来源必须是"她自己答的"，而且要把她的原话带出来
     assert res["yui_source"] == "herself"
     assert res["yui_reply"].get("text"), "得把她回的原话给面板看"
+    assert res["progress"]["items"][0]["raw"] == "1 2", "逐题原话也要给面板"
     assert res["result"]["total"] == 10
     info_res = cls._api_compat(fake, {"action": "info"})
     assert info_res["memory"]["available"] is True
     assert len(res["result"]["rows"]) == 10
+    # 重问：告诉面板是重问哪几题
+    res = cls._api_compat(fake, {"action": "ask_again", "round_id": rid})
+    assert res["ok"] and "重问" in res["note"], res.get("note")
     # 格式错误拒收
     res = cls._api_compat(fake, {"action": "submit", "round_id": rid, "answers": answers[:5]})
     assert res["ok"] is False
@@ -1085,15 +1097,17 @@ def test_panel_compat_tab_present():
                   'id="cm-reveal"', 'id="cm-history"'):
         assert probe in html, probe
     for probe in ('id="cm-yui-said"', 'id="cm-ask-again"', 'id="cfg-yui-dir"',
-                  'id="cm-yui-memory"'):
+                  'id="cm-yui-memory"', 'id="cm-live"', 'id="cm-live-reveal"'):
         assert probe in html, probe
     script = html.split("<script>", 1)[1]
-    for probe in ("cmPollReveal", "你猜 YUI 会选", "action: 'reveal'",
+    for probe in ("cmPollReveal", "cmRenderLive", "你猜 YUI 会选", "action: 'reveal'",
                   "action: 'ask_again'", "净默契分", "随机水平", "和瞎猜一样",
-                  "题目会发给她本人", "她在对话里回的原话", "读不到她的对话库"):
+                  "一题一条发给她", "她在对话里回的原话", "没答上", "未计分"):
         assert probe in script or probe in html, probe
     # 旧的"插件替她答/离线档案"那套必须彻底退场
     assert "离线档案" not in script, "不该再有任何「插件替她答」的残留"
+    # 也别再让她交 JSON 了——她不吐 JSON，实测就是一题都收不回来
+    assert '"own": [0,1,2' not in script
 
 
 # ── 面板 CSS 完整性（真实事故回归）─────────────────────────────
@@ -1214,138 +1228,341 @@ def _fake_dialog_db(tmp_path, rows):
     return str(d)
 
 
-def test_yui_link_extracts_answers_from_her_words():
-    """她能回多行 JSON、带代码块、外面再套一层，都要能认出来。"""
+# ── 她的自由回答怎么解析（用户报的「只有三道题」那条链的后半截）──────
+def test_parse_picks_reads_her_free_form_answer():
+    """她**不会**吐 JSON。让她用自己的话说两个编号，这里认常见写法。"""
     link = _load("_yui_link")
+    opts = ["猫", "狗", "别的毛茸茸", "云养就好"]
     cases = [
-        '{"own": [0,1,2,3], "guess": [3,2,1,0]}',
-        '答完啦喵：\n```json\n{"own": [0,1,2,3], "guess": [3,2,1,0]}\n```',
-        '{"result": {"own": [0,1,2,3], "guess": [3,2,1,0]}}',
-        '好呀喵～\n{\n  "own": [0, 1, 2, 3],\n  "guess": [3, 2, 1, 0]\n}\n答好了',
+        ("1 2", [0, 1]),
+        ("1、2", [0, 1]),
+        ("本喵选1，猜主人2", [0, 1]),
+        ("①3 ②4", [2, 3]),
+        ("我选猫，猜你会选狗", [0, 1]),
+        ("选B，猜你A", [1, 0]),
+        ("３ ４", [2, 3]),
+        ("嗯……1 2 吧", [0, 1]),
     ]
-    for text in cases:
-        got = link._pick_answers(link._json_objects(text), want=4)
-        assert got == {"own": [0, 1, 2, 3], "guess": [3, 2, 1, 0]}, text
-    # 不合格的一律不认（宁可没有，也不能瞎解读）
-    for bad in ("我没有答案", '{"own": [0,1], "guess": [0,1]}',
-                '{"own": [9,9,9,9], "guess": [0,0,0,0]}', ''):
-        assert link._pick_answers(link._json_objects(bad), want=10) is None, bad
+    for text, want in cases:
+        assert link.parse_picks(text, 4, 2, opts) == want, text
+    # 解析不出就必须是空的——**少一个数比编一个数强**
+    for bad in ("只有1", "0 1", "不知道", "", "嗯嗯", "好呀喵～"):
+        assert link.parse_picks(bad, 4, 2, opts) == [], bad
+    # 一长串编号时取最后两个合法编号（她的答案通常在句尾），这是有意的取舍
+    assert link.parse_picks("1 2 3 4 5", 4, 2, opts) == [2, 3]
 
 
-def test_yui_link_reads_only_new_replies(tmp_path, monkeypatch):
+def test_parse_picks_respects_option_count():
     link = _load("_yui_link")
+    assert link.parse_picks("1 2", 2, 2) == [0, 1]
+    # 两个选项的题里，3/4 不是合法编号
+    assert link.parse_picks("3 4", 2, 2) == []
+    # 少于两个合法编号就是没答上
+    assert link.parse_picks("1", 4, 2) == []
+
+
+# ── 读回：按自增 id 锚点，**不按时间戳**（真实事故）──────────────
+def test_yui_dialog_reads_by_id_not_timestamp(tmp_path):
+    """同一批快照写入的多行**共享同一个时间戳**。
+
+    实测宿主 2026-10-09 20:10:44 那一批：ai / human / ai 三行时间戳逐字相同。
+    老实现用 `timestamp > since` 轮询，于是读到了用户自己那条、读漏了她那条，
+    面板上永远是"没收到她的回答"。所以游标必须是自增 id。
+    """
+    link = _load("_yui_link")
+    ts = "2026-10-09 19:00:00.000000"
     path = _fake_dialog_db(tmp_path, [
-        ("human", "在吗", "2026-10-09 19:00:00.000000"),
-        ("ai", '{"own": [0,0,0,0], "guess": [1,1,1,1]}', "2026-10-09 19:05:00.000000"),
-        ("ai", "答好了喵～", "2026-10-09 19:06:00.000000"),
+        ("human", "在吗", ts),
+        ("ai", "在的喵", ts),          # 与上一行**完全同一时间戳**
+        ("ai", "1 2", ts),             # 也一样
     ])
-    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", path)
     dlg = link.YuiDialog(path, "测试")
-    assert dlg.available and dlg.stats()["messages"] == 3
-    assert dlg.latest_ts() == "2026-10-09 19:06:00.000000"
-    # 起始点之后的才算她的回答
-    assert dlg.find_answers("2026-10-09 19:04:00", want=4) is not None
-    assert dlg.find_answers("2026-10-09 19:07:00", want=4) is None, "不能把旧话当成新回答"
-    got = dlg.find_answers("2026-10-09 19:04:00", want=4)
-    assert got["own"] == [0, 0, 0, 0] and got["reply"]
-    # 只覆盖那句普通聊天的窗口里，不能把闲聊当成答案
-    assert dlg.find_answers("2026-10-09 19:05:30", want=4) is None
+    assert dlg.available
+    assert dlg.mark() == 3
+    assert dlg.new_replies(dlg.mark()) == [], "游标之后没有新行，就不该有结果"
+    # 时间戳游标在这里彻底失效：'> 同值' 一条都取不到
+    assert dlg.messages_since(ts) == [], "时间戳不是可靠游标"
+
+
+def test_yui_dialog_picks_up_rows_appended_later(tmp_path):
+    """新回复是**追加**的，id 比之前大——按 id 才能只认新的。"""
+    import sqlite3
+    link = _load("_yui_link")
+    path = _fake_dialog_db(tmp_path, [("ai", "旧话", "2026-10-09 19:00:00.000000")])
+    dlg = link.YuiDialog(path, "测试")
+    mark = dlg.mark()
+    assert mark == 1
+    conn = sqlite3.connect(str(tmp_path / "YUI" / "time_indexed.db"))
+    for text in ("1 2", "闲聊一句"):
+        conn.execute("insert into time_indexed_original (session_id, message, timestamp) "
+                     "values (?,?,?)",
+                     ("s1", json.dumps({"type": "ai", "data": {"content": [
+                         {"type": "text", "text": text}]}}, ensure_ascii=False),
+                      "2026-10-09 19:00:00.000000"))       # 连时间戳都不变
+    conn.commit()
+    conn.close()
+    got = dlg.new_replies(mark)
+    assert [r["text"] for r in got] == ["1 2", "闲聊一句"]
+
+
+# ── 主通道：宿主记忆服务渲染出来的对话流 ──────────────────────
+def test_yui_feed_parses_rendered_dialog():
+    """对话流是 `<说话人> | <正文>`，正文的换行续行，抬头的人设段要忽略。
+
+    说话人**不能写死**（主人昵称人人不同），判据是形状：竖线左边一小段、
+    没有冒号、不以 -/#/*/> 开头。
+    """
+    link = _load("_yui_link")
+    feed = (
+        "\n======YUI的长期记忆======\n"
+        "### 关于YUI\n"
+        "- 昵称: YUI\n"
+        "- 一句话台词: 哼，只有本喵啦~ | 别乱来\n"        # 记忆条目里含 | ，不能当成对话
+        "\n"
+        "YUI | 第一句\n第二行还在说\n"
+        "梦瑶月 | 主人说的话\n"
+        "SYSTEM_MESSAGE | 备忘录: 别忘了\n"
+        "YUI | 第二句\n"
+    )
+    turns = link._parse_feed(feed, ("YUI",))
+    assert [t["role"] for t in turns] == ["YUI", "梦瑶月", "SYSTEM_MESSAGE", "YUI"]
+    assert turns[0]["text"] == "第一句\n第二行还在说"
+    assert turns[3]["text"] == "第二句"
+
+
+def test_yui_feed_cursor_handles_repeated_replies():
+    """她连续两题回同样的话时，游标也必须把后一条认成**新的**。
+
+    只用「最后一条原文」定位会在这种情况下失手：新回复和老尾句一模一样，
+    从尾部往前找只会找到新的那条，于是"新话"变成空集。
+    所以位置（第 count 条仍是当时那条）优先，内容只作兜底。
+    """
+    link = _load("_yui_link")
+    pages = {"n": 0}
+
+    class FakeFeed(link.YuiFeed):
+        def turns(self):
+            base = [{"role": "梦瑶月", "text": "嗯"}, {"role": "YUI", "text": "1 1"}]
+            return base + [{"role": "YUI", "text": "1 1"}] * pages["n"]
+
+    feed = FakeFeed("YUI")
+    snap = feed.snapshot()
+    assert snap["count"] == 2 and snap["tail"] == "1 1"
+    pages["n"] = 1
+    assert feed.new_her_turns(snap) == ["1 1"]
+    pages["n"] = 2
+    assert feed.new_her_turns(snap) == ["1 1", "1 1"]
+    # 窗口滚过（认不出位置也认不出内容）时宁可返回空，绝不猜
+    assert feed.new_her_turns({"count": 99, "tail": "查无此句"}) == []
 
 
 def test_yui_dir_is_never_hardcoded(tmp_path, monkeypatch):
     """她的记忆位置因人而异，**源码里不许写死某个人的绝对路径**。"""
     src = (ROOT / "_yui_link.py").read_text(encoding="utf-8")
-    assert "D:////neko" not in src and "D:/neko" not in src, "不许写死本机路径"
+    assert "D:/neko" not in src and "D:\\neko" not in src, "不许写死本机路径"
     assert "NEKO_YUI_MEMORY_DIR" in src, "要留环境变量覆盖"
     assert "memory_dir" in src, "要优先问宿主 config_manager"
+    # 主通道走宿主服务，端口同样不许写死成单一常量
+    assert "candidate_ports" in src and "MEMORY_SERVER_PORT" in src
 
-    # 找不到时必须如实说找不到，而不是猜一个路径硬用
-    monkeypatch.setenv("NEKO_YUI_MEMORY_DIR", "")
     monkeypatch.delenv("NEKO_YUI_MEMORY_DIR", raising=False)
     link = _load("_yui_link")
     path, why = link.resolve_yui_dir("", [str(tmp_path)])
     assert path == "" and why, (path, why)
 
 
-def test_compat_ask_text_tells_her_what_to_do():
+# ── 出题：一题一条短文，长度由构造保证 ──────────────────────
+def test_compat_ask_text_is_always_short():
+    """整卷一次推会被宿主截断（实测她只拿到 Q1、Q2 和第 3 题的题干）。
+
+    所以每题一条，而且**每一条都要短于 _COMPAT_ASK_MAX_CHARS**——
+    这个上界由构造保证，不去赌宿主的上限到底是多少。
+    """
+    cls = _plugin_cls()
+    compat = _load("_compat")
+    limit = cls._COMPAT_ASK_MAX_CHARS
+    assert limit <= 200, "上限必须明显低于实测截断点（约 200~300 字符）"
+    qids = [q["id"] for q in compat.QUESTIONS]
+    for total in (10, 20):
+        for index in (1, 3, total):
+            for qid in qids:
+                text = cls._compat_ask_text(None, index, total, qid)
+                assert len(text) <= limit, (qid, index, len(text))
+                assert compat.question_public(qid)["text"][:6] in text
+                assert "两个数字" in text, "得告诉她回什么"
+
+
+def test_compat_ask_text_carries_one_question_only():
+    """一条推送里只能有**一道题**——这就是修「只收到三道题」的关键。"""
     cls = _plugin_cls()
     compat = _load("_compat")
     qids = [q["id"] for q in compat.QUESTIONS[:10]]
-    text = cls._compat_ask_text(None, qids)
-    for probe in ("你自己", "主人", "own", "guess", "JSON", "10 个数字"):
-        assert probe in text, probe
-    assert compat.question_public(qids[0])["text"] in text
+    text = cls._compat_ask_text(None, 3, 10, qids[2])
+    assert "3/10" in text
+    hits = [q for q in qids if compat.question_public(q)["text"] in text]
+    assert len(hits) == 1, "一条推送只许带一道题"
 
 
-def _watch_fake(cls, tmp_path, *, replies):
-    """搭一个只够跑 _compat_watch_worker 的假插件。"""
+# ── 面谈调度：她答一题才问下一题 ─────────────────────────────
+def _interview_fake(cls, tmp_path, *, replies):
+    """搭一个只够跑逐题面谈的假插件。
+
+    ``replies``：每一题她的回复（``None`` = 这题她没开口）。
+    """
     compat = _load("_compat")
-    pushed = []
+    pushed: list[str] = []
+    box = list(replies)
 
-    class Dlg:
+    class Feed:
         available = True
-        source = "测试"
 
-        def __init__(self, _p, _s=""):
+        def __init__(self, *_a, **_k):
             pass
 
-        def latest_ts(self):
-            return "2026-10-09 19:00:00.000000"
+        def snapshot(self):
+            return {"count": len(pushed), "tail": "", "her_n": 0}
 
-        def find_answers(self, since, want=0):
-            return replies.pop(0) if replies else None
+        def new_her_turns(self, snap):
+            n = int((snap or {}).get("count") or 0)
+            if len(pushed) > n and len(pushed) <= len(box):
+                reply = box[len(pushed) - 1]
+                return [reply] if reply else []
+            return []
+
+        def stats(self):
+            return {"available": True, "messages": len(pushed), "her_messages": 0}
 
     fake = types.SimpleNamespace(
         _compat=compat.CompatStore(tmp_path / "compat.json"),
-        _compat_job={}, _compat_reply={}, _compat_since_ts={},
-        _yui_mem=True, _stop_event=__import__("threading").Event(),
-        _COMPAT_WAIT_SECONDS=0.3, _COMPAT_POLL_SECONDS=0.02,
+        _compat_job={}, _compat_reply={}, _compat_progress={},
+        _compat_feed=Feed(), _yui_mem=False,
+        _stop_event=__import__("threading").Event(),
+        _COMPAT_ASK_MAX_CHARS=cls._COMPAT_ASK_MAX_CHARS,
+        _COMPAT_PER_Q_WAIT=0.05, _COMPAT_POLL_SECONDS=0.005,
         logger=types.SimpleNamespace(warning=lambda *a, **k: None,
                                      info=lambda *a, **k: None,
                                      exception=lambda *a, **k: None),
     )
-    fake._yui_dialog = lambda: Dlg("", "")
-    fake._compat_push_now = lambda qids: pushed.append(list(qids))
-    fake._compat_since = types.MethodType(cls._compat_since, fake)
-    fake._compat_watch_worker = types.MethodType(cls._compat_watch_worker, fake)
+    fake._char_name = lambda: "YUI"
+    fake._yui_feed = lambda: fake._compat_feed
+    fake._yui_dialog = lambda: None
+    fake._compat_push_text = lambda text, desc: pushed.append(text)
+    for name in ("_compat_ask_text", "_compat_answer_hint", "_compat_cursors",
+                 "_compat_new_texts", "_compat_await_one", "_compat_finish",
+                 "_compat_interview", "_compat_start_round", "_yui_stats"):
+        setattr(fake, name, types.MethodType(getattr(cls, name), fake))
     qids = [q["id"] for q in compat.QUESTIONS[:10]]
-    fake._compat.start_round("r1", qids)
     return fake, pushed, qids
 
 
-def test_watch_worker_takes_her_words_as_the_answer(tmp_path):
+def test_interview_sends_one_question_at_a_time(tmp_path):
+    """她逐题回，插件逐题收——一次推送只带一道题。"""
     cls = _plugin_cls()
-    good = {"own": [1] * 10, "guess": [2] * 10, "reply": '{"own": [...], "guess": [...]}',
-            "ts": "2026-10-09 19:10:00.000000"}
-    fake, pushed, qids = _watch_fake(cls, tmp_path, replies=[None, good])
-    fake._compat_watch_worker("r1")
-    assert pushed and len(pushed[0]) == 10, "必须真的把题目推给她"
-    entry = fake._compat.get("r1")
-    assert entry["yui"]["own"] == [1] * 10
+    compat = _load("_compat")
+    replies = [f"{i % 4 + 1} {(i + 1) % 4 + 1}" for i in range(10)]
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=replies)
+    fake._compat_start_round(qids)
+    for _ in range(400):
+        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
+            break
+        __import__("time").sleep(0.01)
+    assert len(pushed) == 10, f"应该一题一条推 10 次，实际 {len(pushed)} 次"
+    for i, text in enumerate(pushed, 1):
+        assert f"{i}/10" in text, text
+        assert text.count("两个数字") == 1
+    entry = fake._compat.get(fake._compat_job["round_id"])
     assert entry["yui_source"] == "herself", "来源要如实标成「她自己答的」"
-    assert fake._compat_reply["r1"]["text"] == good["reply"], "要留住她的原话"
+    assert entry["yui"]["own"] == [i % 4 for i in range(10)]
+    assert entry["yui_answered"] == list(range(10))
     assert fake._compat_job["status"] == "done"
+    assert fake._compat_reply[entry["id"]]["answered"] == 10
 
 
-def test_watch_worker_never_fabricates_when_she_stays_silent(tmp_path):
-    """她没答就如实说等超时——**绝不许插件替她编一份答案**。"""
+def test_interview_never_fabricates_when_she_stays_silent(tmp_path):
+    """她没开口就如实说没答上：留空 + 从计分里剔除，**绝不替她编一份**。"""
     cls = _plugin_cls()
-    fake, pushed, qids = _watch_fake(cls, tmp_path, replies=[])
-    fake._compat_watch_worker("r1")
-    assert pushed, "题目还是要问出去的"
-    entry = fake._compat.get("r1")
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[None] * 10)
+    fake._compat_start_round(qids)
+    for _ in range(400):
+        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
+            break
+        __import__("time").sleep(0.01)
+    assert pushed, "题还是得问出去"
+    entry = fake._compat.get(fake._compat_job["round_id"])
     assert entry["yui"] is None, "不许伪造答案"
     assert entry["status"] == "answering"
-    assert fake._compat_job["status"] == "timeout"
-    assert "没等到" in fake._compat_job["reason"]
+    assert fake._compat_job["status"] == "no_answer"
+    prog = fake._compat_progress[entry["id"]]
+    assert prog["answered"] == 0
+    assert all(it["state"] == "skipped" for it in prog["items"])
 
 
+def test_interview_scores_only_the_questions_she_answered(tmp_path):
+    """她只答上一部分时：只算答上的，其余如实标 skipped、不进分。"""
+    cls = _plugin_cls()
+    fake, pushed, qids = _interview_fake(
+        cls, tmp_path, replies=["1 2", None, "3 4", None, "1 1", None, None, "2 2", None, "4 4"])
+    fake._compat_start_round(qids)
+    for _ in range(600):
+        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
+            break
+        __import__("time").sleep(0.01)
+    entry = fake._compat.get(fake._compat_job["round_id"])
+    assert entry["yui_answered"] == [0, 2, 4, 7, 9]
+    assert entry["yui"]["own"][1] is None, "没答上的题必须留空"
+    assert fake._compat_job["status"] == "done"
+    prog = fake._compat_progress[entry["id"]]
+    assert prog["answered"] == 5
+    assert [it["state"] for it in prog["items"]] == \
+        ["ok", "skipped", "ok", "skipped", "ok", "skipped", "skipped", "ok", "skipped", "ok"]
+
+    # 用户交卷 → 只按她答上的 5 题计分
+    answers = [{"own": i % 4, "guess": (i + 1) % 4} for i in range(10)]
+    fake._compat.set_self(entry["id"], _load("_compat").validate_answers(qids, answers))
+    revealed = fake._compat.reveal(entry["id"])
+    assert revealed["status"] == "revealed"
+    res = revealed["result"]
+    assert res["total"] == 5 and res["skipped"] == 5
+    assert len(res["rows"]) == 10
+    assert sum(1 for row in res["rows"] if row.get("skipped")) == 5
+
+
+def test_compat_ask_again_retries_only_the_missing_questions(tmp_path):
+    cls = _plugin_cls()
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=["1 2"] + [None] * 9)
+    fake._compat_start_round(qids)
+    for _ in range(600):
+        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
+            break
+        __import__("time").sleep(0.01)
+    rid = fake._compat_job["round_id"]
+    before = len(pushed)
+    fake._api_compat = types.MethodType(cls._api_compat, fake)
+    res = fake._api_compat({"action": "ask_again", "round_id": rid})
+    assert res["ok"] and "9 题" in res["note"], res.get("note")
+    for _ in range(600):
+        if fake._compat_job.get("status") in ("done", "no_answer", "error"):
+            break
+        __import__("time").sleep(0.01)
+    assert len(pushed) == before + 9, "只重问没答上的那 9 题"
+
+
+# ── 面板 ────────────────────────────────────────────────────
 def test_panel_shows_her_actual_words():
-    """揭晓页必须能显示她回的原话（这是"真的她在答"的唯一证据）。"""
+    """揭晓页必须能显示她逐题回的原话（这是"真的她在答"的唯一证据）。"""
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     assert "她在对话里回的原话" in html
     assert "yui_reply" in html
-    assert "再问她一次" in html
+    assert "把没答上的重问一次" in html
+    assert 'id="cm-live"' in html and 'id="cm-live-reveal"' in html
+    assert "cmRenderLive" in html
+    # 她没答上的题要显式标出来，不许混过去
+    assert "没答上" in html and "未计分" in html
+    # 摘要走 textContent（不是 innerHTML），markdown 星号会被**原样显示**——踩过
+    script = html.split("<script>", 1)[1]
+    block = script[script.index("let CM_ROUND"):script.index("tab.dataset.tab === 'compat'")]
+    code = "\n".join(l for l in block.split("\n") if not l.strip().startswith("//"))
+    assert "**" not in code, "默契面板的文案会被原样显示，不许写 markdown 星号"
 
 
 def test_compat_panel_has_no_undeclared_state():
