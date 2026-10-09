@@ -2272,3 +2272,168 @@ def test_compat_panel_has_no_undeclared_state():
     missing = sorted(x for x in used if x not in declared)
     assert not missing, "默契面板里用了没声明的变量：" + str(missing)
     assert "let cmTimer" in script, "揭晓轮询的定时器必须声明"
+
+
+# ── 冻结宿主兼容：这条是给**别人装你的插件**兜底的 ─────────────
+class TestFrozenHostCompat:
+    """宿主是 PyInstaller 冻结进程，只打包它自己引用过的标准库。
+
+    已实证：顶层 ``import urllib.robotparser`` 会让整个插件在 import 阶段死掉——
+    宿主日志里只剩 ``PLUGIN_START_FAILED``，连 traceback 都没有。
+
+    🔴 这条对**别的用户**同样成立：插件包是发出去给别人装的，不是只在自己机器上跑。
+    冻结宿主是个固定二进制，所以"我这能跑"不等于"别人那能跑"这件事不是路径差异，
+    而是**宿主版本差异**——哪天宿主换一版没打包 http.server，插件会在 import 阶段
+    直接死掉、面板都起不来，而且没有任何看得懂的报错。
+    """
+
+    #: "很可能会缺"的标准库。要硬导入就必须 try/except 软导入 + 自带兜底。
+    RISKY = frozenset({
+        "urllib.robotparser", "http.server", "gzip", "zlib", "html", "concurrent.futures",
+    })
+
+    #: 只用于"运行时屏蔽"实验的子集。`zlib` / `concurrent.futures` 剔掉，有实测理由：
+    #:   - `zlib`：解释器启动就被 `zipimport` 加载，meta_path 屏蔽不了（也不可能缺）；
+    #:   - `concurrent.futures`：`asyncio` 无条件 import 它（`asyncio/base_events.py`），
+    #:     而宿主自己就跑 asyncio，所以它不可能缺。屏蔽它会把 `import asyncio` 一起弄挂，
+    #:     产生**假失败**——这条是实测踩出来的，别想当然地把它塞进屏蔽名单。
+    BLOCKABLE = frozenset({"urllib.robotparser", "http.server", "gzip", "html"})
+
+    #: **已知但尚未修的偏差。** 留着是为了不再新增偏差；修一条就删一条
+    #: （`test_known_deviations_are_not_stale` 会提醒你删）。
+    #: `_panel.py` 用 `http.server` 起面板服务；姊妹插件 neko_study_copilot 已经
+    #: 换成裸 socket 自写了，这里还没换。当前宿主确实打包了 http.server（面板能起），
+    #: 所以是**潜在**风险而不是已发生的故障。
+    KNOWN_DEVIATIONS = frozenset({("_panel.py", "http.server")})
+
+    @staticmethod
+    def _top_level_imports(path):
+        import ast
+
+        out: set[str] = set()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:            # 只看模块顶层；try 体内的是软导入，合法
+            if isinstance(node, ast.Import):
+                out.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                out.add(node.module or "")
+        return out
+
+    def _scan(self) -> set[tuple[str, str]]:
+        found: set[tuple[str, str]] = set()
+        for path in sorted(ROOT.glob("*.py")):
+            for name in self._top_level_imports(path):
+                if name in self.RISKY:
+                    found.add((path.name, name))
+        return found
+
+    def test_no_new_top_level_hard_import(self):
+        new = self._scan() - self.KNOWN_DEVIATIONS
+        assert not new, (
+            "新增了冻结宿主的危险硬导入 %s —— 宿主可能没打包它，会让**整个插件**在 "
+            "import 阶段死掉（宿主日志只剩 PLUGIN_START_FAILED，没有 traceback）。"
+            "请改成 try/except 软导入 + 自带兜底。" % sorted(new)
+        )
+
+    def test_known_deviations_are_not_stale(self):
+        """偏差修好之后必须把条目删掉，否则这份清单就变成谎言。"""
+        stale = self.KNOWN_DEVIATIONS - self._scan()
+        assert not stale, "这些偏差看起来已修好，请从 KNOWN_DEVIATIONS 删掉：%s" % sorted(stale)
+
+    def test_sdk_free_modules_survive_blocked_stdlib(self):
+        """子进程里屏蔽掉危险标准库后，不依赖宿主 SDK 的模块必须还能 import。
+
+        这是线上故障的复现条件。`__init__.py` 需要宿主 SDK（这里没法 stub 全），
+        由上面的 AST 扫描覆盖；这里测的是**运行时真的能 import**。
+        屏蔽器会先自证有效——否则这条测试就是假通过。
+        """
+        import subprocess
+        import sys
+        import textwrap
+
+        sdk_free = ["_bank", "_bank2", "_bank_human", "_bank_origin2", "_bank_real",
+                    "_compat", "_compat_data", "_engine", "_games", "_panel", "_scales",
+                    "_store", "_tarot", "_tarot_data", "_yui_link"]
+        # KNOWN_DEVIATIONS 记的是文件名（_panel.py），子进程报的是模块名（_panel），对齐一下
+        blocked_by = {mod[:-3] if mod.endswith(".py") else mod: imp
+                      for mod, imp in self.KNOWN_DEVIATIONS}
+        script = textwrap.dedent(
+            """
+            import importlib, pathlib, sys, types
+
+            BLOCKED = %(blocked)r
+            SDK_FREE = %(mods)r
+            ROOT = pathlib.Path(%(root)r)
+
+            class Blocker:
+                @staticmethod
+                def _hit(fullname):
+                    return any(fullname == b or fullname.startswith(b + ".")
+                               for b in BLOCKED)
+
+                def find_module(self, fullname, path=None):
+                    return self if self._hit(fullname) else None
+
+                def find_spec(self, fullname, path=None, target=None):
+                    if self._hit(fullname):
+                        raise ModuleNotFoundError("blocked: " + fullname)
+                    return None
+
+            sys.meta_path.insert(0, Blocker())
+            # 先自证屏蔽器有效，不然这条测试是假通过。
+            # ⚠ 解释器启动时就加载过的模块（zlib 被 zipimport 用到）**屏蔽不了**：
+            #   meta_path 只在模块不在 sys.modules 里时才被问，所以对这种模块屏蔽是空操作。
+            #   它们也不可能在冻结宿主里缺失，所以跳过并如实打出来，不算失败。
+            PRELOADED = frozenset(sys.modules)
+            blocked_ok = 0
+            for probe in BLOCKED:
+                if probe in PRELOADED:
+                    print("PRELOADED " + probe)
+                    continue
+                try:
+                    __import__(probe)
+                except ModuleNotFoundError:
+                    blocked_ok += 1
+                    print("BLOCKED " + probe)
+                    continue
+                print("BLOCKER_NOT_WORKING:" + probe)
+                raise SystemExit(2)
+            print("BLOCKED_COUNT=" + str(blocked_ok))
+
+            sys.path.insert(0, str(ROOT.parent))
+            pkg = types.ModuleType("neko_assessment")
+            pkg.__path__ = [str(ROOT)]
+            sys.modules["neko_assessment"] = pkg
+
+            for name in SDK_FREE:
+                try:
+                    importlib.import_module("neko_assessment." + name)
+                    print("OK " + name)
+                except Exception as exc:
+                    print("DEP " + name + " " + type(exc).__name__)
+            """
+        ) % {"blocked": sorted(self.BLOCKABLE), "mods": sdk_free, "root": str(ROOT)}
+
+        proc = subprocess.run([sys.executable, "-c", script], capture_output=True,
+                              text=True, timeout=120, cwd=str(ROOT.parent))
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert "BLOCKER_NOT_WORKING" not in out, "屏蔽器没生效，这条测试是假通过：\n" + out
+        # 至少真屏蔽掉一个，否则这条测试什么都没证明
+        counts = [ln for ln in proc.stdout.splitlines() if ln.startswith("BLOCKED_COUNT=")]
+        assert counts and int(counts[0].split("=", 1)[1]) >= 1, "一个都没屏蔽掉，测试无效：\n" + out
+
+        broken = {}
+        for line in proc.stdout.splitlines():
+            if line.startswith("DEP "):
+                _, name, err = line.split(" ", 2)
+                broken[name] = err
+        unexpected = {k: v for k, v in broken.items()
+                      if blocked_by.get(k) is None}
+        assert not unexpected, (
+            "屏蔽掉危险标准库后这些模块 import 失败，但它们不是已记录的偏差：%s\n%s"
+            % (unexpected, out)
+        )
+        # 已记录的偏差必须**真的**以这个原因失败——不然记录本身就是错的
+        for mod, imp in sorted(self.KNOWN_DEVIATIONS):
+            name = mod[:-3] if mod.endswith(".py") else mod
+            assert name in broken, f"{mod} 号称因 {imp} 失败，实际却 import 成功了"
