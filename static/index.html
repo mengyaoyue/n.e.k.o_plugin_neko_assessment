@@ -704,6 +704,7 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
           <h2>交卷了 <span class="muted" style="font-size:var(--fs-xs)">你已交卷，等她</span></h2>
           <div class="muted" id="cm-wait-text">正在等她用自己的身份回答…</div>
           <div id="cm-live" class="cml"></div>
+          <div class="notice" id="cm-nudge" style="margin-top:12px"></div>
           <div class="row" style="margin-top:10px">
             <button class="ghost tiny hidden" id="cm-ask-again">把没答上的重问一次</button>
             <button class="ghost tiny hidden" id="cm-harvest">补收她的回答</button>
@@ -3491,9 +3492,10 @@ function cmWaitText(job, answered, progress){
     // 逐题面谈是**一题一条**发过去、等她答完再发下一题，所以这里要说清进度，
     // 不然一等等几分钟、面板又只说"正在等"，看起来像卡死了。
     case 'asking':      return `题目一题一条发给她了，正在等她用自己的话答…（她会在对话里说话）${tail}`;
+    case 'watching':    return `题都问完了，她答过的我正在陆续收。${tail}`;
     case 'harvesting':  return `正在回头补收她的回答（宿主的落盘比她说得慢）…${tail}`;
     case 'timeout':     return `这一题等了一会儿没接住（${j.reason || ''}）。${tail} 可以点「补收她的回答」，迟到的也能捞回来。`;
-    case 'no_answer':   return `暂时没接住她的话（${j.reason || ''}）。${tail} 她可能已经答了、只是还没落盘——点「补收她的回答」再收一次。`;
+    case 'no_answer':   return `她的回答一直没出现在对话里（${j.reason || ''}）。${tail} 她可能确实答了、只是没落盘——点「补收她的回答」再收一次。`;
     case 'no_dialog':   return `两条读回通道都不通，所以她答了也读不回来（${j.reason || ''}）。`;
     case 'push_failed': return `题目没推给她：${j.reason || ''}`;
     case 'error':       return `出错了：${j.reason || ''}`;
@@ -3512,11 +3514,13 @@ async function cmPollReveal(){
     $('cm-wait-text').textContent = cmWaitText(res.job, res.yui_answered, res.progress);
     const st = (res.job && res.job.status) || '';
     const stuck = ['timeout', 'no_answer', 'no_dialog', 'push_failed', 'error'].includes(st);
+    // 盯梢线程已经在收了，这时再给个"补收"按钮只会让人困惑
+    const busy = st === 'watching' || st === 'harvesting';
     $('cm-ask-again').classList.toggle('hidden', !stuck);
-    // 她的回答可能晚一步才可读（宿主落盘是懒触发的），所以任何没答上的情况都能补收
     const missing = ((res.progress && res.progress.items) || [])
       .some((it) => !(it.picks || []).length);
-    $('cm-harvest').classList.toggle('hidden', !missing);
+    $('cm-harvest').classList.toggle('hidden', !missing || busy);
+    cmRenderNudge(res.progress, res.job);
     if (res.status === 'waiting'){
       cmRenderLive(res.progress, 'cm-live');   // 等待中才往等待卡里刷进度
       return;                                  // 她还没交卷，下轮再问
@@ -3524,6 +3528,30 @@ async function cmPollReveal(){
     clearInterval(cmTimer); cmTimer = null;
     cmRenderReveal(res);
   } catch (err){ /* 下轮再试 */ }
+}
+
+function cmRenderNudge(progress, job){
+  // 关键操作引导：宿主**只在你说过话之后**才把她的回答写进对话（实测：你 20:47 发言
+  // 的那一秒才有 /cache 落盘；她 20:52~20:54 答的题一直没落盘）。所以读不到不是
+  // 她没答，而是还没写。这一步必须说清楚，否则用户只会觉得"又坏了"。
+  const box = $('cm-nudge');
+  if (!box) return;
+  const st = (job && job.status) || '';
+  const missing = ((progress && progress.items) || []).some((it) => !(it.picks || []).length);
+  const answered = Number((progress || {}).answered || 0);
+  const total = Number((progress || {}).total || 0);
+  if (!missing){
+    box.className = 'notice good';
+    box.textContent = total
+      ? `她答上了 ${answered}/${total} 题，全都收下来了。`
+      : '都收全了。';
+    return;
+  }
+  box.className = 'notice';
+  box.innerHTML = `她答过的我会自动收下来，但宿主的规矩是：<b>它把这一轮写进对话记录
+    才有得读，而它只在你说过话之后（或隔几分钟的空闲维护里）才写</b>。
+    所以第一次收可能要等几分钟。等急了就<b>在对话框里回她一句</b>（哪怕一个「嗯」），
+    它会立刻落盘，面板马上把答案收下。`;
 }
 
 function cmRenderLive(progress, target){
@@ -3537,6 +3565,7 @@ function cmRenderLive(progress, target){
     const state = it.state || 'pending';
     const label = state === 'ok' ? '<b class="hit">答上了</b>'
       : state === 'asking' ? '<b>正在答…</b>'
+      : state === 'waiting' ? '<b>等她落盘…</b>'
       : state === 'skipped' ? '<b class="miss">没答上</b>'
       : '<b class="muted">待问</b>';
     const picks = (it.picks || []).map((n) => Number(n) + 1).join(' / ');

@@ -1552,7 +1552,8 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
         _stop_event=__import__("threading").Event(),
         _COMPAT_ASK_MAX_CHARS=cls._COMPAT_ASK_MAX_CHARS,
         _COMPAT_PER_Q_WAIT=0.05, _COMPAT_POLL_SECONDS=0.005,
-        _COMPAT_HARVEST_SECONDS=0.05,
+        _COMPAT_HARVEST_SECONDS=0.05, _COMPAT_WATCH_SECONDS=0.25,
+        _COMPAT_WATCH_POLL_SECONDS=0.005,
         logger=types.SimpleNamespace(warning=lambda *a, **k: None,
                                      info=lambda *a, **k: None,
                                      exception=lambda *a, **k: None),
@@ -1565,23 +1566,23 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
     for name in ("_compat_ask_text", "_compat_answer_hint", "_compat_cursors",
                  "_compat_new_texts", "_compat_all_new_texts", "_compat_await_one",
                  "_compat_finish", "_compat_harvest", "_compat_harvest_worker",
-                 "_compat_interview", "_compat_start_round", "_compat_log_channels",
-                 "_yui_stats"):
+                 "_compat_watch_worker", "_compat_interview", "_compat_start_round",
+                 "_compat_log_channels", "_compat_bus_surface", "_yui_stats"):
         setattr(fake, name, types.MethodType(getattr(cls, name), fake))
     qids = [q["id"] for q in compat.QUESTIONS[:10]]
     return fake, pushed, qids
 
 
-def _wait_round(fake, tries: int = 900) -> None:
+def _wait_round(fake, tries: int = 1200) -> None:
     """等这一轮落定。
 
-    注意：面谈结束时会先定稿、再**后台**补收，所以中途状态会短暂变成
-    ``harvesting``——要等它真的停下来，不然断言到的是中间态。
+    注意：面谈结束时会起一个**盯梢线程**慢慢收，所以中途状态会是 ``watching``——
+    要等它真的停下来，不然断言到的是中间态。
     """
     import time as _t
     for _ in range(tries):
         if fake._compat_job.get("status") in ("done", "no_answer", "error"):
-            _t.sleep(0.05)          # 给后台补收一拍，让它把状态写完
+            _t.sleep(0.08)          # 给盯梢线程一拍，让它把状态写完
             if fake._compat_job.get("status") in ("done", "no_answer", "error"):
                 return
         _t.sleep(0.01)
@@ -1627,6 +1628,31 @@ def test_interview_never_fabricates_when_she_stays_silent(tmp_path):
     prog = fake._compat_progress[entry["id"]]
     assert prog["answered"] == 0
     assert all(it["state"] == "skipped" for it in prog["items"])
+
+
+def test_unanswered_questions_are_not_called_missing_while_watching(tmp_path):
+    """"问完"不等于"她没答上"——她的回答可能要几分钟才落盘。
+
+    实测：她 20:36 说的，20:40:58 才进对话库；20:53 说的，20:55 还没进。
+    上一版问完就判"没答上"，用户看到的就是「她明明答了，面板说她没开口」。
+    """
+    cls = _plugin_cls()
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[None] * 10)
+    fake._COMPAT_WATCH_SECONDS = 30.0            # 盯梢还在跑
+    fake._compat_start_round(qids)
+    for _ in range(400):
+        if fake._compat_progress and fake._compat_job.get("status") == "watching":
+            break
+        __import__("time").sleep(0.01)
+    rid = fake._compat_job["round_id"]
+    prog = fake._compat_progress[rid]
+    assert fake._compat_job["status"] == "watching", fake._compat_job
+    assert prog["status"] == "watching"
+    assert all(it["state"] == "waiting" for it in prog["items"]), \
+        [it["state"] for it in prog["items"]]
+    # 盯梢阶段她没交卷，就不该给分、也不该替她填
+    assert fake._compat.get(rid)["yui"] is None
+    fake._stop_event.set()                        # 收工，别让线程挂着
 
 
 def test_harvest_gets_back_answers_that_landed_late(tmp_path):
@@ -1726,6 +1752,9 @@ def test_panel_shows_her_actual_words():
     assert "把没答上的重问一次" in html
     assert "补收她的回答" in html
     assert 'id="cm-live"' in html and 'id="cm-live-reveal"' in html
+    # 必须说清"只有你说话之后宿主才会把她的回答写进对话"——不然用户只会觉得又坏了
+    assert 'id="cm-nudge"' in html and "cmRenderNudge" in html
+    assert "它只在你说过话之后" in html
     assert "cmRenderLive" in html
     # 她没答上的题要显式标出来，不许混过去
     assert "没答上" in html and "未计分" in html
