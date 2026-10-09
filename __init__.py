@@ -995,6 +995,37 @@ class AssessmentPlugin(NekoPluginBase):
                          "；".join(parts) or "（空）", len(fresh),
                          [t[:16] for t, _ in fresh[:2]])
 
+    @staticmethod
+    def _compat_pick_from(texts: list[str], n_options: int,
+                          options: list[str]) -> tuple[list[int], str]:
+        """从"她说的这几条话"里抠出两个编号，返回 ``(picks, 原文)``。
+
+        分三层试：
+        1. **第一条整条抠**——用户定的规则就是"题目发出后她说的第一条就是答案"，
+           这条必须排在最前；
+        2. **第一、二条拼起来**——提示语教她「①你自己选的 ②猜主人选的」，所以她
+           常常把 ① 和 ② **分成两条消息**发。只在两条**各恰好一个合法编号**时才拼，
+           否则宁可不收——不猜、不补；
+        3. **她后续的话里第一条能抠出两个编号的**——第一条是闲聊、答案在第二条；
+        4. 都不成就返回空。
+        """
+        if not texts:
+            return [], ""
+        picks = _yui_link.parse_picks(texts[0], n_options, 2, options)
+        if picks:
+            return picks, texts[0]
+        if len(texts) >= 2:
+            first, second = texts[0], texts[1]
+            pa = _yui_link.single_pick(first, n_options)
+            pb = _yui_link.single_pick(second, n_options)
+            if len(pa) == 1 and len(pb) == 1:
+                return [pa[0], pb[0]], first + "\n" + second
+        for text in texts[1:]:
+            picks = _yui_link.parse_picks(text, n_options, 2, options)
+            if picks:
+                return picks, text
+        return [], ""
+
     def _compat_await_one(self, question_id: str, index: int, total: int,
                           deadline: float) -> tuple[list[int], str, str]:
         """把这一题发过去，等她交出两个编号。
@@ -1012,6 +1043,7 @@ class AssessmentPlugin(NekoPluginBase):
         )
         last_text = ""
         last_channel = ""
+        collected: list[tuple[str, str]] = []
         while time.time() < deadline:
             stop = getattr(self, "_stop_event", None)
             if stop is not None and stop.is_set():
@@ -1020,10 +1052,16 @@ class AssessmentPlugin(NekoPluginBase):
             self._compat_log_poll(fresh)
             if fresh:
                 # **规则（用户定的）：题目发出去之后她说的第一条，就是这一题的答案。**
-                # 不挑通道、不比时间戳、不看题号——只要是她说的、且是推题之后头一条。
-                text, channel = fresh[0]
-                picks = _yui_link.parse_picks(text, n_options, 2, options)
-                return picks, text, channel
+                # 但"第一条"里可能混进别的东西（宿主的系统通知、复述题目的系统回声），
+                # 所以在她的话里按**先后顺序**找第一条**真能解析出两个编号**的——
+                # 顺序不变、不挑通道、不比时间戳；一条都解析不出就如实算没答上，
+                # 绝不替她补一个。
+                collected.extend(fresh)
+                texts = [t for t, _ in collected]
+                picks, raw = self._compat_pick_from(texts, n_options, options)
+                if picks:
+                    return picks, raw, collected[0][1]
+                last_text, last_channel = collected[-1]
             if stop is not None:
                 stop.wait(self._COMPAT_POLL_SECONDS)
             else:
@@ -1116,6 +1154,94 @@ class AssessmentPlugin(NekoPluginBase):
             "note": ("补收回 %d 题" % total) if total else "没有收到新的回答",
         }
 
+    def _compat_apply_pasted(self, round_id: str, text: str) -> dict:
+        """把**她说的原话**（用户从对话框里复制过来的）解析成答案。
+
+        为什么必须有这条路：实测在**没有实时读回通道**的情况下（见日志里
+        `总线轮询 → messages×40 … 本轮新话 0 条`：只有"推题"那条通道是活的，
+        她的回复任何通道都不给），插件不可能自动收到她的回答。与其一轮一轮
+        赌通道，不如给她一条一定能收齐的路——她确实是自己答的，用户只是把
+        她的话搬过来一次。
+
+        解析规则：**先按她写的题号认领（「8/10」「第4题」），没写题号的按顺序补**。
+        而她写的每一题常常是**两行**（① 她自己选的、② 猜主人选的），所以先把行
+        按「槽位」归成块再解析——按行单抠永远凑不出两个编号。
+        """
+        prog = self._compat_progress.get(round_id)
+        entry = self._compat.get(round_id)
+        if not isinstance(prog, dict) or entry is None:
+            return {"filled": 0, "note": "没有找到这一轮"}
+        qids = [str(q) for q in (entry.get("question_ids") or [])]
+        items = prog.get("items") or []
+        n_questions = len(qids)
+
+        def options_of(idx: int) -> list[str]:
+            pub = _compat.question_public(qids[idx]) or {}
+            return [str(o) for o in (pub.get("options") or [])]
+
+        lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
+        if not lines:
+            return {"filled": 0, "note": "没看到内容"}
+        used_raw = {it.get("raw") for it in items if it.get("raw")}
+        filled = 0
+
+        # ① 分组：带题号的行、或以 ① 开头的行 → 开一个新块；其余行并进当前块。
+        #    她真写过的样子（N.E.K.O 日志 2026-10-09 21:53）：
+        #      「①3，自然醒没人吵，周末就该睡到饱。」
+        #      「②猜你选2，你就喜欢窝在家里。」
+        blocks: list[list] = []          # [[题号(1-based,0=没写), [行, ...]], ...]
+        for line in lines:
+            head = line.lstrip("　 ")
+            ref = _yui_link.referenced_question(line, n_questions)
+            if ref or (head[:1] == "①" and blocks):
+                blocks.append([ref, [line]])
+            elif blocks:
+                blocks[-1][1].append(line)
+            else:
+                blocks.append([0, [line]])
+
+        def fill(idx: int, raw: str, picks: list[int]) -> None:
+            items[idx].update({"state": "ok", "picks": picks, "raw": raw,
+                               "channel": "你贴的"})
+
+        # ② 带题号的块：按题号认领；没写题号的块先攒着，等会儿按顺序补
+        plain: list[str] = []
+        for ref, body_lines in blocks:
+            idx = (ref - 1) if ref else -1
+            if not (0 <= idx < len(items)) or items[idx].get("picks"):
+                if not ref:
+                    plain.append("\n".join(body_lines))
+                continue                                  # 已答上的题不覆盖
+            picks, raw = self._compat_pick_from(body_lines, max(2, len(options_of(idx))),
+                                                options_of(idx))
+            if picks:
+                fill(idx, raw or "\n".join(body_lines), picks)
+                used_raw.add(raw)
+                filled += 1
+
+        # ③ 没写题号的块：按顺序补给还没答上的题
+        for raw in plain:
+            if raw in used_raw:
+                continue
+            for i, item in enumerate(items):
+                if item.get("picks") or i >= n_questions:
+                    continue
+                picks, got = self._compat_pick_from(
+                    raw.splitlines(), max(2, len(options_of(i))), options_of(i))
+                if picks:
+                    fill(i, got or raw, picks)
+                    used_raw.add(raw)
+                    filled += 1
+                    break
+
+        prog["items"] = items
+        prog["answered"] = sum(1 for it in items if len(it.get("picks") or []) == 2)
+        if filled:
+            self.logger.info("[assessment] 贴入她的回答：收下 {} 题（{}）", filled, round_id)
+        self._compat_finish(round_id)
+        return {"filled": filled, "answered": int(prog["answered"]),
+                "note": ("收下 %d 题" % filled) if filled else "这些行里没解析出两个编号"}
+
     def _compat_harvest_worker(self, round_id: str, wait_seconds: float) -> None:
         """面板点「补收」时跑：后台收一会儿，边收边更新进度。"""
         try:
@@ -1176,7 +1302,7 @@ class AssessmentPlugin(NekoPluginBase):
                     if now >= ready_at:
                         it["state"] = "skipped"
                         it["reason"] = "她一直没在对话里落盘"
-        except Exception as exc:
+        except Exception:
             self.logger.warning("[assessment] 盯梢线程异常：{}", traceback.format_exc())
 
     # ── 面谈调度 ─────────────────────────────────────────────
@@ -1478,6 +1604,22 @@ class AssessmentPlugin(NekoPluginBase):
             return {"ok": True, "job": dict(self._compat_job),
                     "note": f"只重问没答上的 {len(missing)} 题。",
                     "progress": dict(self._compat_progress.get(round_id) or {})}
+
+        if action == "probe":
+            # 一次性取证：这一刻每条读回通道到底给了什么，原样返回。
+            # 前面几轮全是靠轮询日志间接推断，浪费了很多时间；有这一条就不用猜了。
+            return {"ok": True, "dump": _yui_link.bus_dump(self.ctx, self._char_name())}
+
+        if action == "paste":
+            round_id = str(payload.get("round_id") or "").strip()
+            entry = self._compat.get(round_id)
+            if entry is None:
+                return {"ok": False, "error": "没有找到这一轮，可能已经换新一轮了。"}
+            got = self._compat_apply_pasted(round_id, payload.get("text") or "")
+            return {"ok": True, "job": dict(self._compat_job),
+                    "progress": dict(self._compat_progress.get(round_id) or {}),
+                    "limits": self._compat_limits(),
+                    "note": got.get("note")}
 
         if action == "harvest":
             # 她的回答**晚一步**才可读（宿主落盘是懒触发的）。与其判她"没答上"，

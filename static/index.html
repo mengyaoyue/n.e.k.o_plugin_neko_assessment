@@ -357,6 +357,22 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 details.more{margin-top:10px}
 details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
 
+/* 保底通道：她答了但读不回来时，把她的原话贴进来。
+   这一步不依赖任何读回通道，所以做得显眼一点——它是唯一"贴了就一定收下"的路。 */
+details.cm-paste{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+details.cm-paste summary{cursor:pointer;font-family:var(--font-ui);font-weight:600;
+  color:#5b4fc4;font-size:var(--fs-sm)}
+details.cm-paste summary::marker{color:var(--accent)}
+details.cm-paste .cm-paste-hint{color:var(--ink2);font-size:var(--fs-xs);line-height:1.75;
+  margin:10px 0 8px}
+details.cm-paste .cm-paste-hint b{color:#3a3260}
+details.cm-paste textarea{width:100%;box-sizing:border-box;resize:vertical;
+  font-family:var(--font-ui);font-size:var(--fs-sm);line-height:1.7;color:#3a3260;
+  padding:10px 12px;border-radius:12px;border:1px solid rgba(109,92,224,.28);
+  background:rgba(255,255,255,.72);outline:none}
+details.cm-paste textarea:focus{border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(109,92,224,.14)}
+
 /* ── 默契测试 ──────────────────────────────────────────────── */
 .cm-lab{font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-sm);margin:14px 0 8px}
 .cm-tag{display:inline-block;padding:2px 10px;border-radius:999px;font-size:var(--fs-2xs);
@@ -709,6 +725,19 @@ details.more summary{cursor:pointer;color:var(--ink2);font-size:var(--fs-sm)}
             <button class="ghost tiny hidden" id="cm-ask-again">把没答上的重问一次</button>
             <button class="ghost tiny hidden" id="cm-harvest">补收她的回答</button>
           </div>
+          <details class="cm-paste" id="cm-paste">
+            <summary>她答了、但我没读到？把她在对话里说的话贴进来</summary>
+            <div class="cm-paste-hint">
+              整段贴进来就行——写了题号（<b>①3</b>、<b>3/10</b>、<b>第4题</b>）的我按题号放；
+              没写题号的，按顺序补到还没答上的题上。这一步不依赖任何读回通道，贴了就一定收下。
+            </div>
+            <textarea id="cm-paste-text" rows="6" spellcheck="false"
+              placeholder="①3，自然醒没人吵，周末就该睡到饱。&#10;②你猜2，我赌你喜欢窝在家里。"></textarea>
+            <div class="row" style="margin-top:8px">
+              <button class="ghost tiny" id="cm-paste-go">收下她说的话</button>
+              <span class="muted" id="cm-paste-note"></span>
+            </div>
+          </details>
         </div>
 
         <div class="card hidden" id="cm-reveal">
@@ -3549,22 +3578,17 @@ function cmRenderNudge(progress, job){
       : '都收全了。';
     return;
   }
-  if (!missing){
-    box.className = 'notice good';
-    box.textContent = total
-      ? `她答上了 ${answered}/${total} 题，全都收下来了。`
-      : '都收全了。';
-    return;
-  }
   // 规则说在最前面（用户定的）：题目发出后她说的第一条就是这一题的答案。
   box.className = 'notice';
   box.innerHTML = `规则：<b>题目发出去之后她说的第一条，就是这一题的答案</b>
     ——我收到就往下发下一题。每题最多等 <b>${Math.round(Number((CM_LIMITS || {}).per_q_wait || 300))} 秒</b>。
     <br>要是长时间没动静，多半是宿主把她的回答压在缓存里没落盘
-    （它只在你说过话之后、或隔几分钟的空闲维护里才写）。那就<b>在对话框里回她一句</b>
+    （它只在你说过话之后、或隔几分钟的空闲维护里才写）——那就<b>在对话框里回她一句</b>
     （哪怕一个「嗯」），它会立刻放出来，我马上把答案收下。
-    也可以点下面的「补收她的回答」。
+    <br><b>保底：</b>把她在对话里说的原话整段贴进下面的框，我照着收——这一步不依赖任何读回通道。
     ${progress && progress.adaptive ? '<br><b>注意：这一轮读回通道一时没响应，已改用快节奏把题发完，之后一直替她收。</b>' : ''}`;
+  const pasteBox = $('cm-paste');
+  if (pasteBox) pasteBox.open = true;   // 缺题的时候直接把保底通道摊开，别让人自己找
 }
 
 function cmRenderLive(progress, target){
@@ -3624,6 +3648,26 @@ $('cm-harvest').onclick = async () => {
     if (!cmTimer) cmTimer = setInterval(cmPollReveal, 1500);
     cmPollReveal();
   } catch (err){ $('cm-wait-text').textContent = String(err); }
+};
+
+$('cm-paste-go').onclick = async () => {
+  // 保底通道：**不依赖任何读回通道**。她说了什么，你贴进来，我照着收。
+  // 这是唯一"贴了就一定收下"的路——所以放在最显眼的地方，别再让人等了又等。
+  const box = $('cm-paste-text');
+  const note = $('cm-paste-note');
+  const text = (box && box.value) || '';
+  if (!text.trim()){ note.textContent = '框里还是空的呢'; return; }
+  if (!CM_ROUND || !CM_ROUND.id){ note.textContent = '这一轮不在了，重新开一轮吧'; return; }
+  note.textContent = '正在收…';
+  try {
+    const res = await api('/api/compat', {action: 'paste', round_id: CM_ROUND.id, text});
+    if (!res.ok){ note.textContent = res.error || '没能收下'; return; }
+    note.textContent = res.note || '收下了';
+    box.value = '';
+    floatText(res.note || '收下了喵', {x: window.innerWidth / 2, y: 120});
+    if (!cmTimer) cmTimer = setInterval(cmPollReveal, 1500);
+    cmPollReveal();
+  } catch (err){ note.textContent = String(err); }
 };
 
 function cmRenderReveal(res){

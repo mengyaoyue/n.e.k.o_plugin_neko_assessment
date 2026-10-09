@@ -728,6 +728,8 @@ class YuiBus:
                 continue
             if rec["role"].lower() in _USER_SIDE_ROLES:
                 continue
+            if is_host_notice(rec["text"]):
+                continue                    # 宿主的"系统通知"，不是她说的话
             bucket = rec["kind"] + "/" + rec["role"]
             key = bucket + "\x00" + rec["text"]
             if key in self._seen:
@@ -770,6 +772,37 @@ class YuiBus:
         info["sample"] = [{"kind": r["kind"], "role": r["role"], "text": r["text"][:40]}
                           for r in recs[-3:]]
         return info
+
+
+def bus_dump(ctx: Any, name: str = "") -> dict:
+    """把**每个命名空间此刻返回的东西**原样摊开（结构化），供接口一次性取证。
+
+    为什么要这个：排查"她答了却读不到"来回了太多轮，每次都是靠轮询日志间接推断。
+    这一个接口直接把"这一刻每条通道给了几条、什么类型、尾巴上是什么原文"摆出来，
+    一次就能定位，不必再猜。
+    """
+    bus = YuiBus(ctx, name)
+    out: dict[str, Any] = {}
+    for attr in _SPACE_ORDER:
+        try:
+            rows = bus._fetch_space(attr)
+        except Exception as exc:                      # noqa: BLE001 - 取证不能因一条通道挂掉
+            out[attr] = {"count": 0, "error": str(exc)}
+            continue
+
+        def _kind(row: dict) -> str:
+            return str(row.get("type") or row.get("kind") or row.get("event") or "?")
+
+        out[attr] = {
+            "count": len(rows),
+            "shape": bus._shapes.get(attr) or "（没试出可用形状）",
+            "kinds": sorted({_kind(r) for r in rows}),
+            "tail": [{"kind": _kind(r), "text": (_record_text(r) or "")[:90]}
+                     for r in rows[-4:]],
+        }
+    out["__shapes"] = dict(bus._shapes)
+    out["__error"] = bus.error()
+    return out
 
 
 def bus_probe(ctx: Any, name: str = "", *, sample: int = 2) -> str:
@@ -955,13 +988,72 @@ def _letter_picks(line: str, n_options: int) -> list[int]:
     return [i for i in out if i < n_options]
 
 
-
-
-# ── 她这句话在说第几题 ────────────────────────────────────────
+# ── 题号 / 系统通知的噪声 ─────────────────────────────────────
 _QREF_PAIR = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2})")
 _QREF_CN = re.compile(r"第\s*(\d{1,2})\s*题")
 
+#: 宿主会往对话里塞"系统通知"（例如「======[系统通知] 来自插件「neko_assessment」：
+#: 默契测试 1/10…」）。那不是她说的话，但会出现在 `conversations` 里——要是被当成
+#: "她说的第一条"，整条读回链路当场作废（而且它自带 `1/10`、选项编号，能骗过解析器）。
+_NOTICE_MARKS = ("[系统通知]", "========", "来自插件「")
 
+#: 题号行（「8/10」「第4题」）不是"她选的选项"，抠编号前必须先摘掉。
+_QREF_TRAIL = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2})\s*[:：]?\s*")
+
+
+def _strip_qref(text: str) -> str:
+    """把「8/10」「第4题」这类**题号**摘掉再抠选项编号。
+
+    不摘的话题号里的数字会混进选项编号。她真会写「8/10：①②，可以随时找你」——
+    那个 8 要是被算成"她选了第 8 项"，答案就整个错位了。
+    """
+    body = _QREF_CN.sub(" ", str(text or ""))
+    # `1/2` 也可能是普通斜杠（日期、分数），所以只认**行首附近**或**紧跟冒号**的，
+    # 免得把她话里的斜杠当题号删掉。
+    return "\n".join(
+        _QREF_TRAIL.sub(" ", line, count=1)
+        if re.match(r"^[^\d]{0,3}\d{1,2}\s*/\s*\d{1,2}\s*[:：]", line.lstrip())
+        else line
+        for line in body.split("\n")
+    )
+
+
+def is_host_notice(text: str) -> bool:
+    """这段文字是不是**宿主自己发的通知**，而不是她或主人说的话。"""
+    body = str(text or "")
+    if not body:
+        return False
+    head = body.lstrip()
+    return any(mark in head[:60] for mark in _NOTICE_MARKS)
+
+
+#: `single_pick` 只在这种长度的短句上工作——长句里的数字多半不是选项编号。
+_SINGLE_MAX = 30
+
+
+def single_pick(text: str, n_options: int) -> list[int]:
+    """这句话**只**说了一个选项编号时返回它（0-based），否则返回 ``[]``。
+
+    "只"是重点。它用来判断「她这条消息是 ① 槽位还是 ② 槽位」：提示语教她
+    「①你自己选的 ②猜主人选的」，于是她常把两个编号分成两条消息发；两条**各恰好
+    一个**编号时才能拼成一题的答案。
+
+    ⚠ 不能用 ``parse_picks(text, n, want=1)`` 代替——那个取的是"最后**一个**编号"，
+    一句话里有两个编号时它也返回一个，拼出来的"答案"她根本没说。
+    """
+    n_options = int(n_options or 0)
+    if n_options < 2:
+        return []
+    body = _strip_qref(_normalize_reply(text)).strip()
+    if not body or len(body) > _SINGLE_MAX:
+        return []
+    nums = _digit_picks(body, n_options)
+    return nums if len(nums) == 1 else []
+
+
+
+
+# ── 她这句话在说第几题 ────────────────────────────────────────
 def referenced_question(text: str, total: int = 10) -> int:
     """她这句话在说第几题（**1-based**）；没说就返回 0。
 
@@ -1021,6 +1113,18 @@ def parse_picks(
                 best = picks
     if best:
         return best[-want:]
+
+    # 逐行抠不出来时，把**整段**当成一句再抠一次。
+    # 为什么必须这样：提示语教她「回两个数字：①你自己选的 ②猜主人选的」，她真就写成
+    # 两行——「①3，自然醒没人吵…」「②猜你选2，…」。一行只有**一个**编号，逐行抠永远
+    # 凑不满两个，于是"她明明答了、我这边却判定成没答上"。近几轮全栽在这上面。
+    flat = _strip_qref(body)
+    whole = _digit_picks(flat, n_options)
+    if len(whole) >= want:
+        return whole[-want:]
+    whole_letters = _letter_picks(flat, n_options)
+    if len(whole_letters) >= want:
+        return whole_letters[-want:]
 
     if options:
         hits: list[tuple[int, int]] = []

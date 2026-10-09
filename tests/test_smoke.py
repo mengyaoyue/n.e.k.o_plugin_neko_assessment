@@ -1277,6 +1277,63 @@ def test_parse_picks_respects_option_count():
     assert link.parse_picks("1", 4, 2) == []
 
 
+def test_single_pick_only_accepts_exactly_one_number():
+    """判断「这条消息是 ① 槽位」只能用 ``single_pick``，不能用 ``parse_picks(want=1)``。
+
+    后者取的是"最后一个编号"：`①3 ②4` 会返回 `[3]`，看着像"只有一个编号"，
+    于是两条消息被拼成一个她根本没说的答案。
+    """
+    link = _load("_yui_link")
+    assert link.single_pick("①3", 4) == [2]
+    assert link.single_pick("②猜你选2", 4) == [1]
+    assert link.single_pick("3/10：①2", 4) == [1], "题号里的 3 不算"
+    # 两个编号 → 不是"单一编号"
+    assert link.single_pick("①3 ②4", 4) == []
+    assert link.single_pick("1 2", 4) == []
+    # 一个都没有 / 超范围 / 长句里的数字 → 都不算
+    assert link.single_pick("好呀喵～", 4) == []
+    assert link.single_pick("9", 4) == []
+    assert link.single_pick("本喵今天吃了2碗饭，下午3点睡醒，然后4点又饿了，真拿本喵没办法", 4) == []
+    # 对照：parse_picks(want=1) 会在这两个上给出"一个编号"，正是不能用它的原因
+    assert link.parse_picks("①3 ②4", 4, 1) == [3]
+    assert link.parse_picks("1 2", 4, 1) == [1]
+
+
+def test_parse_picks_reads_her_two_line_answer():
+    """**真实事故**：提示语教她「回两个数字：①你自己选的 ②猜主人选的」，她就真写成
+    两行——「①3，自然醒没人吵…」「②猜你选2，…」。
+
+    旧解析器要求**同一行里凑够两个编号**，一行只有一个编号永远凑不满，于是她怎么答
+    都被判成"没答上"。日志里她的原话就是这个形状（2026-10-09 21:53 conversations 样例）。
+    """
+    link = _load("_yui_link")
+    opts = ["A", "B", "C", "D"]
+    real = "①3，自然醒没人吵，周末就该睡到饱。\n②猜你选2，你就喜欢窝在家里。"
+    assert link.parse_picks(real, 4, 2, opts) == [2, 1], "两行的回答必须读得出来"
+    assert link.parse_picks(real.replace("\n", ""), 4, 2, opts) == [2, 1], "写成一行也要认"
+    # 题号不能混进选项编号：「8/10」里的 8 不是"她选了第8项"
+    assert link.parse_picks("8/10：①2 ②4", 4, 2, opts) == [1, 3]
+    assert link.parse_picks("第4题：①1，本喵喜欢有人陪。②猜主人选3。", 4, 2, opts) == [0, 2]
+    # 只有一个编号仍然是"没答上"——不猜、不补
+    assert link.parse_picks("①3，自然醒没人吵。", 4, 2, opts) == []
+
+
+def test_host_notice_is_never_taken_as_her_words():
+    """宿主会往对话里塞「======[系统通知] 来自插件「…」」——**那不是她说的**。
+
+    它自带 `1/10` 和完整选项编号，解析器能从中读出两个"合法编号"；要是被当成
+    "她说的第一条"，整轮读回当场作废。
+    """
+    link = _load("_yui_link")
+    notice = ("======[系统通知] 来自插件「neko_assessment」：默契测试 3/10："
+              "下面哪一句最像对她说的情话？ 1 温柔 2 直白 3 诗意 4 搞笑")
+    assert link.is_host_notice(notice) is True
+    assert link.parse_picks(notice, 4, 2, None) != [], "它确实能被解析出编号——所以才必须挡掉"
+    assert link.is_host_notice("①3，自然醒没人吵。") is False
+    assert link.is_host_notice("[20261009 Mon 21:53] ①3 ②2") is False
+    assert link.is_host_notice("") is False
+
+
 # ── 读回：按自增 id 锚点，**不按时间戳**（真实事故）──────────────
 def test_yui_dialog_reads_by_id_not_timestamp(tmp_path):
     """同一批快照写入的多行**共享同一个时间戳**。
@@ -1629,9 +1686,11 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
     fake._yui_dialog = lambda: None
     fake._compat_push_text = lambda text, desc: pushed.append(text)
     fake._compat_norm = cls._compat_norm          # staticmethod，直接挂函数
+    fake._compat_pick_from = cls._compat_pick_from  # 同上，静态方法不能走 MethodType
     for name in ("_compat_ask_text", "_compat_answer_hint", "_compat_is_our_push",
                  "_compat_cursors",
                  "_compat_new_texts", "_compat_all_new_texts", "_compat_await_one",
+                 "_compat_apply_pasted",
                  "_compat_finish", "_compat_harvest", "_compat_harvest_worker",
                  "_compat_watch_worker", "_compat_interview", "_compat_start_round",
                  "_compat_log_channels", "_compat_bus_surface", "_compat_log_poll",
@@ -1747,7 +1806,6 @@ def test_our_own_push_is_never_taken_as_her_answer(tmp_path):
     还标着"解析成选项 3/4"。9/10 题都是这么"答上"的。
     """
     cls = _plugin_cls()
-    compat = _load("_compat")
     fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
     # 把真实的题目正文当成"她的话"喂进去
     fake._compat_pushed = set()
@@ -1869,7 +1927,6 @@ def test_numbered_reply_is_bound_to_its_own_question(tmp_path):
     面板上看就是"跳题"。
     """
     cls = _plugin_cls()
-    compat = _load("_compat")
     fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
     fake._compat.start_round("r1", qids)
     prog = {
@@ -1896,7 +1953,6 @@ def test_harvest_gets_back_answers_that_landed_late(tmp_path):
     落盘是**懒触发**的。所以不能一判"没答上"就完事，得回头再收。
     """
     cls = _plugin_cls()
-    compat = _load("_compat")
     fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[])
     fake._compat.start_round("r1", qids)
     prog = {
@@ -1934,6 +1990,108 @@ def test_harvest_gets_back_answers_that_landed_late(tmp_path):
 
 def program_channel(prog, index):
     return (prog["items"][index].get("channel") or "")
+
+
+def _blank_progress(qids, round_id="r1"):
+    return {
+        "round_id": round_id, "total": len(qids), "index": len(qids),
+        "status": "asking", "answered": 0, "reason": "",
+        "items": [{"i": i + 1, "qid": q, "state": "pending"} for i, q in enumerate(qids)],
+    }
+
+
+def test_interview_reads_her_two_line_reply(tmp_path):
+    """端到端：她说的是**两行**（①自己选的 / ②猜主人选的），整条链路也必须收下。
+
+    这是"她明明答了、面板却全是没答上"的真凶之一。
+    """
+    cls = _plugin_cls()
+    replies = ["①%d，本喵选的。\n②猜主人选%d。" % (i % 4 + 1, (i + 1) % 4 + 1)
+               for i in range(10)]
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=replies)
+    fake._compat_start_round(qids)
+    _wait_round(fake)
+    entry = fake._compat.get(fake._compat_job["round_id"])
+    assert entry["yui_answered"] == list(range(10)), "两行的回答也必须收下"
+    assert entry["yui"]["own"][0] == 0 and entry["yui"]["guess"][0] == 1
+
+
+def test_interview_takes_two_messages_as_one_answer(tmp_path):
+    """她把 ① 和 ② **分成两条消息**发过来时，也要拼成一题的答案。
+
+    只在两条**各恰好一个合法编号**时才拼——多一个数就不拼，宁可不收也不猜错。
+    """
+    cls = _plugin_cls()
+    replies = ["①%d" % (i % 4 + 1) + "\n②%d" % ((i + 1) % 4 + 1) for i in range(10)]
+    fake, pushed, qids = _interview_fake(cls, tmp_path, replies=replies)
+    fake._compat_start_round(qids)
+    _wait_round(fake)
+    entry = fake._compat.get(fake._compat_job["round_id"])
+    assert entry["yui_answered"] == list(range(10))
+
+    # 第一条就是答案（用户定的规则）——第一条自己能抠出两个编号时直接用它
+    n = 4
+    assert cls._compat_pick_from(["①1 ②2", "①3 ②4"], n, None) == ([0, 1], "①1 ②2")
+    assert cls._compat_pick_from(["1 2", "①3 ②4"], n, None) == ([0, 1], "1 2")
+    # 第一条只有一个编号、第二条两个编号时**不拼**，退到她后续的话里找
+    assert cls._compat_pick_from(["①1", "①3 ②4"], n, None) == ([2, 3], "①3 ②4")
+    # 只有一条、且只有一个编号 —— 不猜、不补
+    assert cls._compat_pick_from(["①3"], n, None) == ([], "")
+    assert cls._compat_pick_from([], n, None) == ([], "")
+
+
+def test_paste_takes_her_words_without_any_read_channel(tmp_path):
+    """保底通道：把她的原话贴进来就一定收得下——**不依赖任何读回通道**。
+
+    为什么要这条路：她的回复在所有读回通道里都得等宿主落盘（懒触发），插件做不到
+    实时自动收。贴进来是唯一一定成功的路，所以它必须真的能用。
+    """
+    cls = _plugin_cls()
+    fake, _pushed, qids = _interview_fake(cls, tmp_path, replies=[])
+    fake._compat.start_round("r1", qids)
+    prog = _blank_progress(qids)
+    fake._compat_progress["r1"] = prog
+    fake._compat.set_self("r1", {"own": [0] * 10, "guess": [1] * 10})
+
+    # 她真写过的形状：第 3 题带题号，前两题没写题号、各自两行
+    pasted = ("①3，自然醒没人吵，周末就该睡到饱。\n②猜你选2，你就喜欢窝在家里。\n"
+              "①1，本喵喜欢有人陪。\n②猜主人选4。\n"
+              "3/10：①2 ②3")
+    got = fake._compat_apply_pasted("r1", pasted)
+    assert got["filled"] == 3, got
+    assert prog["items"][2]["picks"] == [1, 2], "带题号的必须按题号放，不能按顺序塞"
+    assert prog["items"][0]["picks"] == [2, 1]
+    assert prog["items"][1]["picks"] == [0, 3]
+    assert program_channel(prog, 0) == "你贴的"
+    assert prog["answered"] == 3
+
+    # 再贴一遍不会重复覆盖已答上的题
+    assert fake._compat_apply_pasted("r1", pasted)["filled"] == 0
+
+    # 解析不出来的内容必须原样说"没解析出"，不能瞎填
+    bad = fake._compat_apply_pasted("r1", "嗯嗯好呀喵～")
+    assert bad["filled"] == 0 and "没解析出" in bad["note"]
+    # 空内容也要有明确说法
+    assert fake._compat_apply_pasted("r1", "   \n  ")["filled"] == 0
+
+
+def test_compat_api_has_paste_and_probe():
+    """面板要用的两个动作必须在 API 里真的存在，别只在文档里存在。"""
+    src = (ROOT / "__init__.py").read_text(encoding="utf-8")
+    assert 'if action == "paste":' in src
+    assert 'if action == "probe":' in src
+
+
+def test_panel_has_the_paste_channel():
+    """保底通道必须真的在面板上：输入框 + 按钮 + 调 paste 的 JS。
+
+    这一条是"贴了就一定收下"的唯一入口，面板上缺一个元素它就是个空承诺。
+    """
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    for need in ('id="cm-paste"', 'id="cm-paste-text"', 'id="cm-paste-go"',
+                 'id="cm-paste-note"', "action: 'paste'"):
+        assert need in html, need
+    assert "referenced_question" not in html       # 面板不该自己解析，交给后端
 
 
 def test_interview_scores_only_the_questions_she_answered(tmp_path):
@@ -1995,7 +2153,7 @@ def test_panel_shows_her_actual_words():
     # 摘要走 textContent（不是 innerHTML），markdown 星号会被**原样显示**——踩过
     script = html.split("<script>", 1)[1]
     block = script[script.index("let CM_ROUND"):script.index("tab.dataset.tab === 'compat'")]
-    code = "\n".join(l for l in block.split("\n") if not l.strip().startswith("//"))
+    code = "\n".join(ln for ln in block.split("\n") if not ln.strip().startswith("//"))
     assert "**" not in code, "默契面板的文案会被原样显示，不许写 markdown 星号"
 
 
