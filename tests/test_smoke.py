@@ -1035,6 +1035,9 @@ def test_api_compat_actions(tmp_path):
         def _yui_stats(self):
             return {"available": True, "messages": 42, "bus": {"available": True}}
 
+        def _compat_limits(self):
+            return {"per_q_wait": 300.0, "gap": 20.0, "round_window": 3600.0}
+
         def _compat_start_round(self, question_ids, *, only=None, round_id=""):
             # 测试里不真的推给她：直接造一个"她已答完"的回合
             rid = round_id or "r-test"
@@ -1552,7 +1555,8 @@ def _interview_fake(cls, tmp_path, *, replies, late=None):
         _stop_event=__import__("threading").Event(),
         _COMPAT_ASK_MAX_CHARS=cls._COMPAT_ASK_MAX_CHARS,
         _COMPAT_PER_Q_WAIT=0.05, _COMPAT_POLL_SECONDS=0.005,
-        _COMPAT_HARVEST_SECONDS=0.05, _COMPAT_WATCH_SECONDS=0.25,
+        _COMPAT_GAP_SECONDS=0.02, _COMPAT_ROUND_WINDOW_SECONDS=0.25,
+        _COMPAT_HARVEST_SECONDS=0.05,
         _COMPAT_WATCH_POLL_SECONDS=0.005,
         logger=types.SimpleNamespace(warning=lambda *a, **k: None,
                                      info=lambda *a, **k: None,
@@ -1607,11 +1611,22 @@ def test_interview_sends_one_question_at_a_time(tmp_path):
     assert fake._compat_reply[entry["id"]]["answered"] == 10
 
 
-def test_interview_waits_short_then_lets_harvest_catch_up(tmp_path):
-    """等一题的时间必须短——10 题 × 75 秒 = 12.5 分钟，用户会以为卡死了。"""
+def test_compat_time_scales_are_decoupled(tmp_path):
+    """三个时间刻度必须分开，而且"等她答"的窗口要够长。
+
+    用户要求：「等待时间搞长一些，至少 300 秒，不然我还没有填完就超时了」。
+    但读不到她的实时回答，所以**等待只会等满**——拿 300 秒当"问下一题的间隔"，
+    10 题就要 50 分钟才问得完。所以：
+      · 每题"还算在等她"的窗口 ≥ 300 秒（不提前判她没答上）
+      · 问下一题的间隔是**另一个**更小的值
+      · 整轮窗口还要更长（落盘要几分钟，也可能要等用户说句话）
+    """
     cls = _plugin_cls()
-    assert cls._COMPAT_PER_Q_WAIT <= 30.0, cls._COMPAT_PER_Q_WAIT
-    assert cls._COMPAT_HARVEST_SECONDS > 0, "得留一次「回头再收」的机会"
+    assert cls._COMPAT_PER_Q_WAIT >= 300.0, cls._COMPAT_PER_Q_WAIT
+    assert cls._COMPAT_GAP_SECONDS < cls._COMPAT_PER_Q_WAIT, "间隔不能等于等待窗口"
+    assert cls._COMPAT_GAP_SECONDS <= 60.0, "间隔太大，10 题要问太久"
+    assert cls._COMPAT_ROUND_WINDOW_SECONDS > cls._COMPAT_PER_Q_WAIT, "整轮窗口要更长"
+    assert cls._COMPAT_ROUND_WINDOW_SECONDS >= 1800.0
 
 
 def test_interview_never_fabricates_when_she_stays_silent(tmp_path):
@@ -1638,7 +1653,7 @@ def test_unanswered_questions_are_not_called_missing_while_watching(tmp_path):
     """
     cls = _plugin_cls()
     fake, pushed, qids = _interview_fake(cls, tmp_path, replies=[None] * 10)
-    fake._COMPAT_WATCH_SECONDS = 30.0            # 盯梢还在跑
+    fake._COMPAT_ROUND_WINDOW_SECONDS = 30.0     # 盯梢还在跑
     fake._compat_start_round(qids)
     for _ in range(400):
         if fake._compat_progress and fake._compat_job.get("status") == "watching":

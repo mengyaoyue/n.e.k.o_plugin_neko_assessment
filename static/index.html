@@ -3347,6 +3347,7 @@ RELAX = {
 let CM_ROUND = null;       // {id, questions, answers:[{own,guess}|null]}
 let CM_POS = 0;
 let cmTimer = null;        // 揭晓轮询的定时器
+let CM_LIMITS = {};        // 后端给的三个时间刻度（每题等她多久 / 问下一题间隔 / 整轮窗口）
 
 function cmStage(name){
   ['intro', 'answer', 'wait', 'reveal'].forEach((n) => $('cm-' + n).classList.toggle('hidden', n !== name));
@@ -3511,6 +3512,7 @@ async function cmPollReveal(){
       $('cm-wait-text').textContent = res.error || '揭晓失败';
       return;
     }
+    if (res.limits) CM_LIMITS = res.limits;
     $('cm-wait-text').textContent = cmWaitText(res.job, res.yui_answered, res.progress);
     const st = (res.job && res.job.status) || '';
     const stuck = ['timeout', 'no_answer', 'no_dialog', 'push_failed', 'error'].includes(st);
@@ -3548,10 +3550,14 @@ function cmRenderNudge(progress, job){
     return;
   }
   box.className = 'notice';
-  box.innerHTML = `她答过的我会自动收下来，但宿主的规矩是：<b>它把这一轮写进对话记录
-    才有得读，而它只在你说过话之后（或隔几分钟的空闲维护里）才写</b>。
-    所以第一次收可能要等几分钟。等急了就<b>在对话框里回她一句</b>（哪怕一个「嗯」），
-    它会立刻落盘，面板马上把答案收下。`;
+  const lim = CM_LIMITS || {};
+  const perQ = Math.round(Number(lim.per_q_wait || 300));
+  const windowMin = Math.round(Number(lim.round_window || 3600) / 60);
+  box.innerHTML = `她答过的我会自动收下来。每一题我都给她留了 <b>${perQ} 秒</b>
+    ——这段时间里不会判她没答上；整轮我一直盯 <b>${windowMin} 分钟</b>，你随时可以揭晓。
+    <br>宿主的规矩是：<b>它把这一轮写进对话记录才有得读，而它只在你说过话之后
+    （或隔几分钟的空闲维护里）才写</b>。等急了就<b>在对话框里回她一句</b>
+    （哪怕一个「嗯」），它会立刻落盘，面板马上把答案收下。`;
 }
 
 function cmRenderLive(progress, target){
@@ -3563,9 +3569,16 @@ function cmRenderLive(progress, target){
   box.innerHTML = items.map((it) => {
     const i = Number(it.i || 0);
     const state = it.state || 'pending';
+    // "还算在等她"的窗口还剩多久——用户最关心的就是这个，直接算给他看
+    const askedAt = Number(it.asked_at || 0);
+    const waitFor = Number(it.wait_seconds || 0);
+    const left = (askedAt && waitFor) ? Math.max(0, Math.round(askedAt + waitFor - Date.now() / 1000)) : null;
+    const waitLabel = (left === null || left > 0)
+      ? `<b>等她答…${left ? `（还剩 ${left} 秒）` : ''}</b>`
+      : '<b>等她落盘…（还会继续收）</b>';
     const label = state === 'ok' ? '<b class="hit">答上了</b>'
       : state === 'asking' ? '<b>正在答…</b>'
-      : state === 'waiting' ? '<b>等她落盘…</b>'
+      : state === 'waiting' ? waitLabel
       : state === 'skipped' ? '<b class="miss">没答上</b>'
       : '<b class="muted">待问</b>';
     const picks = (it.picks || []).map((n) => Number(n) + 1).join(' / ');

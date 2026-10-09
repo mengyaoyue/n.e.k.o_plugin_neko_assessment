@@ -135,6 +135,8 @@ class AssessmentPlugin(NekoPluginBase):
             self.yui_memory_dir: str = _UI_DEFAULTS["yui_memory_dir"]
             # 后台线程（逐题面谈）的停止信号；shutdown 时置位
             self._stop_event = threading.Event()
+            # 收到过多少次 chat 事件（只记前 40 条日志，用来判断能不能收到她的话）
+            self._chat_events: int = 0
         except Exception:
             _dump_crash("init")
             raise
@@ -690,14 +692,19 @@ class AssessmentPlugin(NekoPluginBase):
     # 新增的多行**共享同一个时间戳**，`timestamp > since` 会读到用户那条、读漏她那条。
     # 主通道改走宿主记忆服务的实时对话流，备用通道按自增 `id` 锚点读。
     _COMPAT_ASK_MAX_CHARS = _COMPAT_ASK_MAX_CHARS   # 单条推送的硬上限（见模块级注释）
-    # 等她为某一题开口。**实测没有可用的实时读回通道**（见 _compat_bus_surface），
-    # 而宿主的落盘要几分钟，所以这里等不到很正常——短等一下就走，交给盯梢线程。
-    _COMPAT_PER_Q_WAIT = 12.0
-    _COMPAT_POLL_SECONDS = 1.5
-    # 问完之后**一直盯着**，她什么时候落盘什么时候收。落盘可能晚好几分钟，
-    # 所以窗口要长；这是唯一不依赖"实时通道"的稳妥做法。
-    _COMPAT_WATCH_SECONDS = 1800.0
+    # ── 三个时间刻度，**故意分开**（合在一起会互相绑死）───────────────
+    # ① 每题「还算在等她」的窗口：用户要求至少 300 秒。在这段时间内，面板不许
+    #    把这一题写成"没答上"——她的回答可能只是还没落盘。
+    _COMPAT_PER_Q_WAIT = 300.0
+    # ② 问下一题的间隔。**不能拿 ① 当间隔**：读不到她的实时回答，等待只会等满，
+    #    300 秒 × 10 题 = 50 分钟才问得完。20 秒既避免了"连续推送攒成一条"，
+    #    也让她来得及按顺序答。
+    _COMPAT_GAP_SECONDS = 20.0
+    # ③ 整轮窗口：问完之后一直收到这里为止。落盘可能晚好几分钟，也可能要等
+    #    用户说句话才触发，所以给足一小时；期间面板随时可以揭晓。
+    _COMPAT_ROUND_WINDOW_SECONDS = 3600.0
     _COMPAT_WATCH_POLL_SECONDS = 15.0
+    _COMPAT_POLL_SECONDS = 1.5
     # 面板上手动点「补收」时后台跑多久
     _COMPAT_HARVEST_SECONDS = 300.0
 
@@ -1029,10 +1036,10 @@ class AssessmentPlugin(NekoPluginBase):
 
         实测宿主把她的回答写进对话库要等好几分钟（她 20:36 说的，20:40:58 才入库；
         20:53 说的，20:55 还没入库），而且没有可用的实时读回通道。所以"问完就判
-        她没答上"是错的——只能一直等。收齐了立刻停；到点还没齐才如实标"没答上"。
+        她没答上"是错的——只能一直等。收齐了立刻停；窗口走完才如实标"没答上"。
         """
         try:
-            deadline = time.time() + self._COMPAT_WATCH_SECONDS
+            deadline = time.time() + self._COMPAT_ROUND_WINDOW_SECONDS
             while True:
                 stop = getattr(self, "_stop_event", None)
                 if stop is not None and stop.is_set():
@@ -1060,8 +1067,14 @@ class AssessmentPlugin(NekoPluginBase):
             self._compat_finish(round_id)
             prog = self._compat_progress.get(round_id)
             if isinstance(prog, dict):
+                now = time.time()
                 for it in (prog.get("items") or []):
-                    if not (it.get("picks") or []) and it.get("state") == "waiting":
+                    if it.get("picks") or it.get("state") != "waiting":
+                        continue
+                    # 每题至少「还算在等她」满 _COMPAT_PER_Q_WAIT 秒，才允许写成没答上
+                    ready_at = float(it.get("asked_at") or 0.0) + float(
+                        it.get("wait_seconds") or self._COMPAT_PER_Q_WAIT)
+                    if now >= ready_at:
                         it["state"] = "skipped"
                         it["reason"] = "她一直没在对话里落盘"
         except Exception as exc:
@@ -1141,16 +1154,21 @@ class AssessmentPlugin(NekoPluginBase):
                 item["state"] = "asking"
                 prog["index"] = i + 1
                 prog["status"] = "asking"
+                # 只等 _COMPAT_GAP_SECONDS 看她有没有当场接住；没接住就先问下一题。
+                # 这一题**不算没答上**——它还有 _COMPAT_PER_Q_WAIT 秒的窗口，
+                # 之后的盯梢线程会一直替它收。
                 picks, raw, channel = self._compat_await_one(
-                    qid, i + 1, total, time.time() + self._COMPAT_PER_Q_WAIT)
+                    qid, i + 1, total, time.time() + self._COMPAT_GAP_SECONDS)
                 if picks:
                     item["state"] = "ok"
                     item["picks"] = picks
                     prog["answered"] = int(prog.get("answered") or 0) + 1
                 else:
-                    item["state"] = "skipped"
+                    item["state"] = "waiting"
                     item["picks"] = []
-                    item["reason"] = "她没说清两个编号" if raw else "她没开口"
+                    item["reason"] = "还没读到她的回答（宿主落盘慢）"
+                item["asked_at"] = time.time()
+                item["wait_seconds"] = self._COMPAT_PER_Q_WAIT
                 item["raw"] = raw
                 item["channel"] = channel
                 items[i] = item
@@ -1285,6 +1303,14 @@ class AssessmentPlugin(NekoPluginBase):
         self.logger.info("[assessment] ctx.bus 对象面：{}", self._compat_bus_surface())
 
     # ── 接口 ─────────────────────────────────────────────────
+    def _compat_limits(self) -> dict:
+        """三个时间刻度原样交给面板——用户最关心的就是"等多久"。"""
+        return {
+            "per_q_wait": self._COMPAT_PER_Q_WAIT,
+            "gap": self._COMPAT_GAP_SECONDS,
+            "round_window": self._COMPAT_ROUND_WINDOW_SECONDS,
+        }
+
     def _api_compat(self, body: dict) -> dict:
         """默契测试：开回合 / 交卷 / 揭晓 / 重问 / 历史。双方交卷前绝不返回她的答案。"""
         if self._compat is None:
@@ -1303,6 +1329,7 @@ class AssessmentPlugin(NekoPluginBase):
                 },
                 "job": dict(self._compat_job),
                 "progress": dict(self._compat_progress.get(entry.get("id")) or {}),
+                "limits": self._compat_limits(),
                 "note": "题目一题一条发给她，她在对话里用自己的话答；你在这边同时答你的。",
             }
 
@@ -1368,7 +1395,7 @@ class AssessmentPlugin(NekoPluginBase):
             if entry.get("status") != "revealed":
                 # 双方没交齐：只说进度，不给任何答案
                 return {"ok": True, "status": "waiting", "job": dict(self._compat_job),
-                        "progress": prog,
+                        "progress": prog, "limits": self._compat_limits(),
                         "yui_answered": bool(entry.get("yui"))}
             return {
                 "ok": True,
@@ -1380,6 +1407,7 @@ class AssessmentPlugin(NekoPluginBase):
                 "result": entry["result"],
                 "job": dict(self._compat_job),
                 "progress": prog,
+                "limits": self._compat_limits(),
             }
 
         return {
@@ -1388,6 +1416,7 @@ class AssessmentPlugin(NekoPluginBase):
             "job": dict(self._compat_job),
             "progress": dict(self._compat_progress.get(
                 str(self._compat_job.get("round_id") or "")) or {}),
+            "limits": self._compat_limits(),
             "memory": self._yui_stats(),
         }
 
@@ -1632,7 +1661,21 @@ class AssessmentPlugin(NekoPluginBase):
     # ── 聊天入口（轻量，方便在对话框里唤起）────────────────────
     @message(id="assessment_chat", source="chat")
     def on_chat_message(self, **kwargs) -> dict:
-        """对话框里发「/测评」就把量表清单回给主人（同步方法，与内置插件一致）。"""
+        """对话框里发「/测评」就把量表清单回给主人（同步方法，与内置插件一致）。
+
+        另外：**把每一次收到的事件原样记一笔**（只记前 40 次，免得刷屏）。
+        宿主的插件事件 API 没有公开文档，这条日志是我们判断"插件到底能不能收到
+        她（猫娘）的话"的唯一证据——万一能收到，实时读回就有了着落，不必再靠
+        盯梢等落盘。
+        """
+        try:
+            self._chat_events = int(getattr(self, "_chat_events", 0) or 0) + 1
+            if self._chat_events <= 40:
+                preview = {str(k): str(kwargs[k])[:60] for k in list(kwargs)[:8]}
+                self.logger.info("[assessment] 收到 chat 事件 #{}：{}",
+                                 self._chat_events, preview)
+        except Exception:
+            pass
         try:
             content = str(kwargs.get("text") or kwargs.get("content") or kwargs.get("message") or "").strip()
             lowered = content.lower()
