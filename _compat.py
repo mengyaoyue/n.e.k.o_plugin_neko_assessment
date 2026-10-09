@@ -126,7 +126,11 @@ def question_public(question_id: str) -> Optional[dict]:
 
 
 def sample_questions(count: int = ROUND_SIZE, rng: Optional[random.Random] = None) -> list[str]:
-    """从 60 题里不放回抽 count 题（类别尽量铺开：每类先各拿一题再补满）。"""
+    """从 100 题里不放回抽 count 题（类别尽量铺开：每类先各拿一题再补满）。
+
+    类别数（10）正好等于轮长（10），所以**每一轮都会覆盖全部 10 个类别**，
+    不会出现某个类别长期抽不到的情况。
+    """
     roller = rng or random
     want = max(1, min(len(QUESTIONS), int(count)))
     by_cat: dict[str, list[dict]] = {}

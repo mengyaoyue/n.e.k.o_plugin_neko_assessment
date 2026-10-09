@@ -901,9 +901,9 @@ def test_game_audio_assets_present():
 # ── 默契测试（你和 YUI 的默契度；机制复刻、题库自写）──────────
 def test_compat_bank_well_formed():
     compat = _load("_compat")
-    assert len(compat.QUESTIONS) == 60
+    assert len(compat.QUESTIONS) == 100
     ids = [q["id"] for q in compat.QUESTIONS]
-    assert len(set(ids)) == 60, "题目 id 不能重复"
+    assert len(set(ids)) == 100, "题目 id 不能重复"
     cats = {q["cat"] for q in compat.QUESTIONS}
     assert cats == set(compat.CATEGORIES), "类别覆盖不齐"
     for q in compat.QUESTIONS:
@@ -913,6 +913,44 @@ def test_compat_bank_well_formed():
         # 公开题面绝不携带档案答案（偷看不了）
         pub = compat.question_public(q["id"])
         assert "own" not in pub and "guess" not in pub
+
+
+def test_compat_bank_is_balanced_and_has_no_duplicates():
+    """题库要**匀**：每类题数一样多，且题面/选项不能重复。
+
+    为什么钉住这两条：抽样是"每个类别先各来一题再补满"，所以**类别间题数差得越大，
+    轮与轮之间的重复感越强**。而重复的题面（含选项全同）会让"默契"变成记答案。
+    类别数（10）= 轮长（10）时，每轮正好覆盖全部类别、一类一题。
+    """
+    compat = _load("_compat")
+    import collections
+
+    per_cat = collections.Counter(q["cat"] for q in compat.QUESTIONS)
+    assert set(per_cat) == set(compat.CATEGORIES)
+    assert len(set(per_cat.values())) == 1, f"每类题数必须一样多：{dict(per_cat)}"
+    assert per_cat["daily"] >= 10, "每类至少 10 题，不然一轮里会反复见到同一类"
+    # 类别数正好等于轮长 → 每轮覆盖全部类别
+    assert len(compat.CATEGORIES) == compat.ROUND_SIZE
+
+    texts = [q["text"] for q in compat.QUESTIONS]
+    assert len(set(texts)) == len(texts), "题面不能重复"
+    opts = [tuple(q["options"]) for q in compat.QUESTIONS]
+    assert len(set(opts)) == len(opts), "选项组合不能重复"
+    # 同一题里选项也不能重复（否则"选那个"没有意义）
+    for q in compat.QUESTIONS:
+        assert len(set(q["options"])) == 4, f"{q['id']} 选项内有重复"
+
+
+def test_compat_sample_covers_every_category():
+    """一轮 10 题必须**把 10 个类别都抽到**——不能出现"这轮没问到礼物"。"""
+    import random
+
+    compat = _load("_compat")
+    for seed in range(12):
+        qids = compat.sample_questions(rng=random.Random(seed))
+        assert len(qids) == compat.ROUND_SIZE and len(set(qids)) == compat.ROUND_SIZE
+        cats = {compat.QUESTION_BY_ID[q]["cat"] for q in qids}
+        assert cats == set(compat.CATEGORIES), f"seed={seed} 漏了 {set(compat.CATEGORIES) - cats}"
 
 
 def test_compat_sample_and_validate():
