@@ -750,11 +750,121 @@ def test_tarot_fallback_reading_is_honest():
         assert c["name"] in text and c["position"] in text
 
 
+def _tarot_fake(cls, tmp_path):
+    """只够跑塔罗记录接口的假插件：真接上 `_api_tarot_*` 与真实的 tarot.json 读写。"""
+    import threading
+
+    box = {"dir": Path(tmp_path)}
+    fake = types.SimpleNamespace(
+        _tarot_lock=threading.Lock(),
+        _tarot_job={"status": "idle", "draw_id": "", "text": ""},
+        logger=types.SimpleNamespace(warning=lambda *a, **k: None,
+                                     info=lambda *a, **k: None,
+                                     exception=lambda *a, **k: None),
+    )
+    fake._data_dir = lambda: box["dir"]
+    for name in ("_tarot_path", "_tarot_read", "_tarot_write", "_tarot_update",
+                 "_api_tarot_info", "_api_tarot_draw", "_api_tarot_delete",
+                 "_api_tarot_clear", "_tarot_worker"):
+        setattr(fake, name, types.MethodType(getattr(cls, name), fake))
+    return fake
+
+
+def _read_tarot_json(tmp_path) -> dict:
+    return json.loads((Path(tmp_path) / "tarot.json").read_text(encoding="utf-8"))
+
+
+def test_tarot_delete_really_erases_it_from_disk(tmp_path):
+    """删一条占卜记录：`history` 和 `readings` **两份都要清掉**。
+
+    为什么盯这么紧：占卜记录里常常是很私人的问题（"我不知道为什么而活"这种），
+    **"列表里看不见了、内容还躺在磁盘上"比"删不掉"更糟**。所以这条测试直接读
+    tarot.json 原文来断言，不看接口嘴上说了什么。
+    """
+    cls = _plugin_cls()
+    fake = _tarot_fake(cls, tmp_path)
+    a = fake._api_tarot_draw({"spread": "three", "question": "我喜欢你"})
+    b = fake._api_tarot_draw({"spread": "one", "question": "该不该继续"})
+    assert a["ok"] and b["ok"]
+    keep_id, del_id, del_q = a["draw"]["id"], b["draw"]["id"], b["draw"]["question"]
+
+    res = fake._api_tarot_delete({"id": del_id})
+    assert res["ok"] is True, res
+    assert res["removed"] == 2, "history 一条 + readings 一条，都该删掉"
+
+    raw = _read_tarot_json(tmp_path)
+    assert [h["id"] for h in raw["history"]] == [keep_id]
+    assert del_id not in raw["readings"], "readings 里的详情也必须清掉"
+    assert del_q not in json.dumps(raw, ensure_ascii=False), "被删的问题文本不许留在文件里"
+    # 返回结构与 GET /api/tarot 一致——面板直接拿它重画
+    for key in ("history", "interprets", "spreads", "job"):
+        assert key in res, key
+
+
+def test_tarot_delete_failure_is_honest_and_keeps_the_shape(tmp_path):
+    """删不存在的 / 不给 id：如实报错，而且**结构不变**（面板还得拿 history 重画）。"""
+    cls = _plugin_cls()
+    fake = _tarot_fake(cls, tmp_path)
+    fake._api_tarot_draw({"spread": "three", "question": "留着"})
+
+    for payload in ({"id": "根本没这条"}, {}):
+        res = fake._api_tarot_delete(payload)
+        assert res["ok"] is False
+        assert res.get("error"), res
+        assert "history" in res and "spreads" in res, "失败也要回同样的结构"
+    # 失败不能把别的记录弄丢
+    assert len(_read_tarot_json(tmp_path)["history"]) == 1
+
+
+def test_tarot_clear_empties_both_halves(tmp_path):
+    cls = _plugin_cls()
+    fake = _tarot_fake(cls, tmp_path)
+    for i in range(4):
+        fake._api_tarot_draw({"spread": "three", "question": f"问题{i}"})
+
+    res = fake._api_tarot_clear({})
+    assert res["ok"] is True and res["cleared"]["history"] == 4
+    assert res["history"] == []
+    raw = _read_tarot_json(tmp_path)
+    assert raw["history"] == [] and raw["readings"] == {}
+
+
+def test_late_interpretation_never_resurrects_a_deleted_record(tmp_path):
+    """正在解读的那条被删掉后，**晚到的解读绝不许写回去**。
+
+    不然会出现"删了又回来"——而且那块内容还留在磁盘上。这条直接调真的
+    `_tarot_worker`，不是照着实现抄一段模拟。
+    """
+    import asyncio
+
+    cls = _plugin_cls()
+    fake = _tarot_fake(cls, tmp_path)
+    drawn = fake._api_tarot_draw({"spread": "three", "question": "删我"})
+    draw_id = drawn["draw"]["id"]
+    fake._tarot_job = {"status": "running", "draw_id": draw_id, "text": ""}
+
+    assert fake._api_tarot_delete({"id": draw_id})["ok"] is True
+    assert fake._tarot_job["status"] == "idle", "被删的解读任务要收回 idle"
+
+    async def _llm(_drawn):
+        return "迟到的解读内容"
+
+    fake._tarot_llm = _llm
+    fake._tarot_worker(draw_id)          # 真跑一遍后台线程干的事
+
+    assert "迟到的解读内容" not in json.dumps(_read_tarot_json(tmp_path), ensure_ascii=False)
+    assert fake._tarot_job["status"] == "idle", "不能把已删记录标成 done"
+    assert asyncio.get_event_loop_policy() is not None   # 顺带确保没把事件循环弄坏
+
+
 def test_panel_tarot_tab_present():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-tab="tarot"' in html
     assert "tspreads" in html and "tdraw" in html and "tinterpret" in html
-    assert "tarot/c" not in html  # 卡面地址由后端数据给出，前端不硬编码牌号
+    # 卡面地址由后端数据给出，前端不硬编码牌号。
+    # ⚠ 这里必须用正则卡到**牌号**（c 后面跟数字），不能只查 "tarot/c" 这个子串——
+    #   否则 `/api/tarot/clear` 这种正常路由也会被误伤（真的踩了一次）。
+    assert not re.search(r"tarot/c\d", html), "卡面地址不许在前端硬编码"
     # 版权说明：塔罗牌面来源必须在「关于」里写清楚
     assert "Rider-Waite" in html or "莱德-伟特" in html
 

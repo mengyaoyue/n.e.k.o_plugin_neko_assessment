@@ -231,6 +231,8 @@ class AssessmentPlugin(NekoPluginBase):
             ("POST", "/api/card"): self._api_card,
             ("GET", "/api/tarot"): self._api_tarot_info,
             ("POST", "/api/tarot/draw"): self._api_tarot_draw,
+            ("POST", "/api/tarot/delete"): self._api_tarot_delete,
+            ("POST", "/api/tarot/clear"): self._api_tarot_clear,
             ("POST", "/api/tarot/interpret"): self._api_tarot_interpret,
             ("GET", "/api/game"): self._api_game,
             ("POST", "/api/game"): self._api_game,
@@ -1780,6 +1782,67 @@ class AssessmentPlugin(NekoPluginBase):
         self._tarot_update(mutate)
         return {"ok": True, "draw": entry, "job": self._tarot_job}
 
+    def _api_tarot_delete(self, body: dict) -> dict:
+        """删掉**一条**占卜记录（连同它的解读）。
+
+        与量表记录的「删除」同一套做法，但有一点必须做绝：占卜记录里常常是很私人的
+        问题（"我不知道为什么而活"这种），**"删了还在"比"删不掉"更糟**。所以
+        `history`（列表）和 `readings`（详情）两份都要清掉——只清一份的话，
+        列表里看不见了，可内容还躺在磁盘上。
+
+        返回结构和 `GET /api/tarot` **完全一致**（删完直接把最新列表回给面板）：
+        省一次往返，也避免面板拿到"删之前"的旧列表又把它渲染回去。
+        """
+        draw_id = str((body or {}).get("id") or "").strip()
+        problem = ""
+        hit = {"history": 0, "reading": 0}
+        if not draw_id:
+            problem = "没说要删哪一条。"
+        else:
+            def mutate(state: dict) -> None:
+                history = state.get("history")
+                if isinstance(history, list):
+                    keep = [h for h in history
+                            if not (isinstance(h, dict) and str(h.get("id")) == draw_id)]
+                    hit["history"] = len(history) - len(keep)
+                    state["history"] = keep
+                readings = state.get("readings")
+                if isinstance(readings, dict) and draw_id in readings:
+                    readings.pop(draw_id, None)
+                    hit["reading"] = 1
+
+            self._tarot_update(mutate)
+            if not (hit["history"] or hit["reading"]):
+                problem = "没找到这条记录，可能已经删过了。"
+            if str(self._tarot_job.get("draw_id") or "") == draw_id:
+                # 正在解读的那条被删了：把任务收回 idle，别让面板一直等一条不存在的记录
+                self._tarot_job = {"status": "idle", "draw_id": "", "text": ""}
+        out = self._api_tarot_info({})
+        if problem:
+            out["ok"] = False
+            out["error"] = problem
+        else:
+            out["removed"] = hit["history"] + hit["reading"]
+        return out
+
+    def _api_tarot_clear(self, _body: dict) -> dict:
+        """清空**全部**占卜记录（history 与 readings 一起清，不留残骸）。"""
+        cleared = {"history": 0, "readings": 0}
+
+        def mutate(state: dict) -> None:
+            history = state.get("history")
+            cleared["history"] = len(history) if isinstance(history, list) else 0
+            readings = state.get("readings")
+            cleared["readings"] = len(readings) if isinstance(readings, dict) else 0
+            state["history"] = []
+            state["readings"] = {}
+
+        self._tarot_update(mutate)
+        self._tarot_job = {"status": "idle", "draw_id": "", "text": ""}
+        out = self._api_tarot_info({})
+        out["cleared"] = cleared
+        return out
+
     def _api_tarot_interpret(self, body: dict) -> dict:
         payload = body if isinstance(body, dict) else {}
         draw_id = str(payload.get("draw_id") or "").strip()
@@ -1822,17 +1885,25 @@ class AssessmentPlugin(NekoPluginBase):
                 text, kind = _tarot.fallback_reading(drawn), "fallback"
             if not str(text or "").strip():
                 text, kind = _tarot.fallback_reading(drawn), "fallback"
+            wrote = {"ok": False}
+
+            def mutate(state: dict) -> None:
+                # 不再用 setdefault：整份被清空过的话，别把 readings 这个键又造回来
+                readings = state.get("readings")
+                if isinstance(readings, dict) and isinstance(readings.get(draw_id), dict):
+                    readings[draw_id]["interpret"] = text
+                    readings[draw_id]["interpret_kind"] = kind
+                    wrote["ok"] = True
+
+            self._tarot_update(mutate)
+            if not wrote["ok"]:
+                # 这条记录在解读途中被删掉了（或被整份清空）：**不回写、也不把任务标成
+                # done**，否则面板会继续渲染一条已经不存在的记录。
+                self._tarot_job = {"status": "idle", "draw_id": "", "text": ""}
+                return
             self._tarot_job = {
                 "status": "done", "draw_id": draw_id, "text": text, "kind": kind,
             }
-
-            def mutate(state: dict) -> None:
-                readings = state.setdefault("readings", {})
-                if isinstance(readings.get(draw_id), dict):
-                    readings[draw_id]["interpret"] = text
-                    readings[draw_id]["interpret_kind"] = kind
-
-            self._tarot_update(mutate)
         except Exception as exc:
             self.logger.warning("[assessment] 塔罗解读线程异常：{}", traceback.format_exc())
             self._tarot_job = {"status": "error", "draw_id": draw_id, "text": f"解读出了点问题：{exc}"}

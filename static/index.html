@@ -267,6 +267,10 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 .thist-item:hover{background:rgba(255,255,255,.6)}
 .thist-item .h-when{color:var(--dim);font-size:calc(var(--fs) * .82);flex:none}
 .thist-item .h-spread{font-weight:600;font-size:calc(var(--fs) * .86);color:#40375f;flex:none}
+/* 记录行右侧的删除：问题占满剩余宽度，按钮推到最右；删的过程中整行淡出给反馈 */
+.thist-item .h-q{flex:1;min-width:0}
+.thist-item .h-del{margin-left:auto;flex:none}
+.thist-item.gone{opacity:.35;pointer-events:none;transition:.15s}
 
 /* ── 解压小游戏（电子板 + 切水果，移植自学习辅助猫娘）────────── */
 .seg{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
@@ -570,6 +574,10 @@ details.cm-paste textarea:focus{border-color:var(--accent);
         </div>
         <div class="card">
           <h2>占卜记录</h2>
+          <div class="row" style="margin-bottom:10px">
+            <button class="ghost tiny hidden" id="btn-tarot-clear">清空全部</button>
+            <span class="muted" id="tcount"></span>
+          </div>
           <div id="thist"></div>
         </div>
       </div>
@@ -1776,45 +1784,105 @@ document.querySelectorAll('.tab').forEach((tab) => {
 // ── 猫娘塔罗 ────────────────────────────────────────────────
 let TAROT_SPREADS = [];
 let TAROT_INTERPRETS = {};
+let TAROT_HIST = [];        // 占卜记录列表（删除/清空后由接口回的最新列表覆盖）
 let CURRENT_DRAW = null;
 let tarotPick = 'three';
 let tarotTimer = null;
 
 function loadTarotInfo(){
-  api('/api/tarot').then((info) => {
-    if (!info || info.ok === false) return;
-    TAROT_SPREADS = info.spreads || [];
-    TAROT_INTERPRETS = info.interprets || {};
-    if (!$('tspreads').childElementCount && TAROT_SPREADS.length){
-      $('tspreads').innerHTML = TAROT_SPREADS.map((s) =>
-        `<div class="tchip${s.id === tarotPick ? ' on' : ''}" data-spread="${s.id}">
-           <b>${esc(s.name)}</b><small>${esc(s.sub)} · ${s.count} 张</small></div>`).join('');
-      document.querySelectorAll('#tspreads .tchip').forEach((chip) => {
-        chip.onclick = () => {
-          tarotPick = chip.dataset.spread;
-          document.querySelectorAll('#tspreads .tchip').forEach((c) => c.classList.toggle('on', c === chip));
-        };
-      });
-    }
-    const hist = info.history || [];
-    $('thist').innerHTML = hist.length
-      ? hist.map((h) => {
-          const d = new Date((h.ts || 0) * 1000);
-          const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-          return `<div class="thist-item" data-id="${esc(h.id)}">
+  // 只负责取数；渲染全在 applyTarotInfo 里，删除/清空复用它
+  api('/api/tarot').then(applyTarotInfo).catch(() => {});
+}
+
+function renderTarotHistory(){
+  // 记录列表单独成一个函数：删除 / 清空之后接口会把**最新列表**一起回来，
+  // 直接拿它重画就行，不必再打一次 /api/tarot（少一次往返，也不会读到删之前的旧列表）。
+  const hist = TAROT_HIST || [];
+  const clearBtn = $('btn-tarot-clear');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !hist.length);
+  if ($('tcount')) $('tcount').textContent = hist.length ? `共 ${hist.length} 条 · 点一条重看牌面` : '';
+  $('thist').innerHTML = hist.length
+    ? hist.map((h) => {
+        const d = new Date((h.ts || 0) * 1000);
+        const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        return `<div class="thist-item" data-id="${esc(h.id)}">
             <span class="h-when">${when}</span>
             <span class="h-spread">${esc(h.spread_name)}</span>
-            <span class="muted">${esc(h.question || '（没有具体问题）')}</span></div>`;
-        }).join('')
-      : '<div class="muted">还没有占卜过喵。</div>';
-    document.querySelectorAll('.thist-item').forEach((el) => {
-      el.onclick = () => {
-        const entry = hist.find((h) => h.id === el.dataset.id);
-        if (entry) renderTarot(entry, TAROT_INTERPRETS[entry.id] || '');
+            <span class="muted h-q">${esc(h.question || '（没有具体问题）')}</span>
+            <button class="ghost tiny h-del" data-del="${esc(h.id)}">删除</button></div>`;
+      }).join('')
+    : '<div class="muted">还没有占卜过喵。</div>';
+  document.querySelectorAll('.thist-item').forEach((el) => {
+    el.onclick = () => {
+      const entry = hist.find((h) => h.id === el.dataset.id);
+      if (entry) renderTarot(entry, TAROT_INTERPRETS[entry.id] || '');
+    };
+  });
+  document.querySelectorAll('.thist-item .h-del').forEach((btn) => {
+    btn.onclick = async (ev) => {
+      // 必须挡住冒泡：整行也绑了点击（打开这条记录），不挡的话点「删除」会顺手把它打开
+      ev.stopPropagation();
+      if (btn.dataset.busy) return;
+      btn.dataset.busy = '1';
+      const row = btn.closest('.thist-item');
+      if (row) row.classList.add('gone');       // 立刻给反馈，不等网络
+      try {
+        const res = await api('/api/tarot/delete', {id: btn.dataset.del});
+        if (!res || res.ok === false){
+          if (row) row.classList.remove('gone');
+          delete btn.dataset.busy;
+          btn.textContent = '没删掉';
+          return;
+        }
+        applyTarotInfo(res);
+      } catch (err){
+        if (row) row.classList.remove('gone');
+        delete btn.dataset.busy;
+        btn.textContent = '没删掉';
+      }
+    };
+  });
+}
+
+function clearTarotBoard(){
+  // 正在看的这条被删了（或整份被清空）——别让牌面继续挂在那儿，看着像"没删掉"
+  CURRENT_DRAW = null;
+  TAROT_INTERPRETS = {};
+  if ($('tdraw')) $('tdraw').innerHTML = '';
+  if ($('tinterpret')){ $('tinterpret').classList.add('hidden'); $('tinterpret').textContent = ''; }
+  if ($('st-interp')) $('st-interp').textContent = '';
+}
+
+function applyTarotInfo(info){
+  if (!info || info.ok === false) return;
+  TAROT_SPREADS = info.spreads || [];
+  TAROT_INTERPRETS = info.interprets || {};
+  if (!$('tspreads').childElementCount && TAROT_SPREADS.length){
+    $('tspreads').innerHTML = TAROT_SPREADS.map((s) =>
+      `<div class="tchip${s.id === tarotPick ? ' on' : ''}" data-spread="${s.id}">
+         <b>${esc(s.name)}</b><small>${esc(s.sub)} · ${s.count} 张</small></div>`).join('');
+    document.querySelectorAll('#tspreads .tchip').forEach((chip) => {
+      chip.onclick = () => {
+        tarotPick = chip.dataset.spread;
+        document.querySelectorAll('#tspreads .tchip').forEach((c) => c.classList.toggle('on', c === chip));
       };
     });
-  }).catch(() => {});
+  }
+  TAROT_HIST = info.history || [];
+  renderTarotHistory();
+  if (CURRENT_DRAW && !TAROT_HIST.some((h) => h.id === CURRENT_DRAW.id)) clearTarotBoard();
 }
+
+$('btn-tarot-clear').onclick = async () => {
+  // 与量表记录的「清空全部」一致：不可撤销，所以必须二次确认。
+  if (!confirm('清空所有占卜记录？这一步不可撤销。')) return;
+  try {
+    const res = await api('/api/tarot/clear', {});
+    if (!res || res.ok === false) return;
+    clearTarotBoard();
+    applyTarotInfo(res);
+  } catch (err){ /* 下轮再试 */ }
+};
 
 function renderTarot(draw, interpretText){
   CURRENT_DRAW = draw;
