@@ -881,6 +881,33 @@ def test_panel_trail_dual_listener_and_ripple():
     assert "localStorage.removeItem('assess_base')" in html
 
 
+def test_panel_badge_system_rendered():
+    """切水果成就：分组 / 档位配色 / 进度条都得真的渲染出来。
+
+    用户原话「现在的不太好看」——重排成：分组小标题 + 图标砖（已获得按档位上色）
+    + 未获得画进度条。这里钉住结构，防止谁手滑改回平铺列表。
+    """
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    # 头部：完成度计数 + 总进度条
+    assert 'id="fr-badge-count"' in html and 'id="fr-badge-bar"' in html
+    assert 'id="fr-badge-pct"' in html
+    # 分组顺序由后端 badge_groups 给，前端不自己抄一份
+    assert "badge_groups" in html
+    assert "function badgeCard(" in html
+    card = re.search(r"function badgeCard\(.*?\n  \}", html, re.S).group(0)
+    assert "data-tier" in card, "档位决定配色，不能丢"
+    assert "b-prog" in card and "b-num" in card, "未获得的徽章要画进度条"
+    assert "esc(item.title)" in card and "esc(item.note)" in card, "后端字符串进 innerHTML 必须转义"
+    # 新成就用 chip 展示，并且提交后给新获得的徽章打 .just 放个动画
+    assert "gchip" in html
+    assert "renderRecords(res.state, new Set(res.gained" in html
+    # 徽章标题/备注/进度数字都不许写死 px 字号（必须由 --fs 派生）
+    css = re.search(r"<style>(.*?)</style>", html, re.S).group(1)
+    seg = css[css.index(".bhead{"):css.index("details.more{")]
+    assert "@keyframes bpop" in seg
+    assert not re.search(r"font-size:\s*\d+(\.\d+)?px", seg), "新样式里不许写死 px 字号"
+
+
 # ── 解压小游戏（电子板 + 切水果，移植自学习辅助猫娘）────────────
 def test_game_config_rules(tmp_path):
     games = _load("_games")
@@ -897,6 +924,17 @@ def test_game_config_rules(tmp_path):
     assert games.level_of(10 ** 6) == games.LEVEL_MAX
     d1, d2 = games.difficulty(1), games.difficulty(5)
     assert d2["spawn_interval"] < d1["spawn_interval"] and d2["fall_speed"] > d1["fall_speed"]
+    # 徽章结构：key 唯一、分组合法、档位合法，且能随 config 下发（不许夹带不可序列化对象）
+    keys = [spec["key"] for spec in games.GAME_BADGES]
+    assert len(keys) == len(set(keys)), "徽章 key 不许重复"
+    assert len(games.GAME_BADGES) >= 16, "题库之外，成就也该够玩"
+    group_names = dict(games.BADGE_GROUPS)
+    for spec in games.GAME_BADGES:
+        assert spec["icon"], spec["key"] + " 缺图标"
+        assert spec["group"] in group_names, spec["key"] + " 分组不在 BADGE_GROUPS 里"
+        assert spec["tier"] in (1, 2, 3), spec["key"] + " 档位非法"
+    assert set(group_names) <= {spec["group"] for spec in games.GAME_BADGES}, "有空的分组"
+    json.dumps(config)   # config 会整体下发，这里炸了说明徽章里混进了不可序列化的东西
 
 
 def test_game_judge_run_badges():
@@ -914,6 +952,43 @@ def test_game_judge_run_badges():
     # 累计类成就看历史 + 本局
     gained = games.judge_run({"sliced": 3}, {"sliced": 997})
     assert "game:total1000" in gained
+    # 新成就：阈值之上全给
+    gained = games.judge_run(
+        {"score": 1000, "level": 20, "max_combo": 16, "duration": 181,
+         "sliced": 60, "missed": 0, "bombs": 25},
+        {"runs": 24, "sliced": 4990, "bombs": 0},
+    )
+    for key in ("game:score1000", "game:combo16", "game:flawless50", "game:endure180",
+                "game:level20", "game:total5000", "game:runs20", "game:bomb_total20"):
+        assert key in gained, key
+    # 阈值之下一律不给（差一点都不行，包括 179.9 秒和 19 个炸弹）
+    gained = games.judge_run(
+        {"score": 999, "level": 19, "max_combo": 15, "duration": 179.9,
+         "sliced": 49, "missed": 1, "bombs": 19},
+        {"runs": 18, "sliced": 4900, "bombs": 0},
+    )
+    for key in ("game:score1000", "game:combo16", "game:flawless50", "game:endure180",
+                "game:level20", "game:total5000", "game:runs20", "game:bomb_total20",
+                "game:flawless"):
+        assert key not in gained, key
+
+
+def test_game_badge_progress():
+    games = _load("_games")
+    best = {"score": 640, "level": 12, "max_combo": 9, "duration": 95, "sliced": 30, "missed": 2}
+    totals = {"runs": 7, "sliced": 640, "missed": 20, "bombs": 3}
+    assert games.badge_progress("game:score500", best, totals) == {"have": 500, "need": 500}   # 夹住不溢出
+    assert games.badge_progress("game:score100", best, totals) == {"have": 100, "need": 100}
+    assert games.badge_progress("game:combo16", best, totals) == {"have": 9, "need": 16}
+    assert games.badge_progress("game:endure180", best, totals) == {"have": 95, "need": 180}
+    assert games.badge_progress("game:total1000", best, totals) == {"have": 640, "need": 1000}
+    assert games.badge_progress("game:bomb_total20", best, totals) == {"have": 3, "need": 20}
+    # 手稳类按最高分那局估算：漏过就显示 0，不把"差一点"画成"快到了"
+    assert games.badge_progress("game:flawless", best, totals)["have"] == 0
+    clean = dict(best, missed=0)
+    assert games.badge_progress("game:flawless", clean, totals) == {"have": 20, "need": 20}
+    # 没有进度的徽章 need=0（前端见到就跳过进度条）
+    assert games.badge_progress("game:不存在的徽章", best, totals) == {"have": 0, "need": 0}
 
 
 def test_game_store_submit_and_state(tmp_path):
@@ -921,16 +996,37 @@ def test_game_store_submit_and_state(tmp_path):
     store = games.GameStore(tmp_path / "games.json")
     first = store.submit({"score": 120, "level": 2, "max_combo": 5, "duration": 30, "sliced": 10, "missed": 2})
     assert first["ok"] and first["is_best"] and first["gained"] == ["game:first_slice", "game:score100"]
-    second = store.submit({"score": 90, "level": 1, "max_combo": 3, "duration": 12, "sliced": 8, "missed": 1})
+    assert first["gained_badges"][0]["title"] == "第一刀" and first["gained_badges"][0]["icon"]
+    second = store.submit({"score": 90, "level": 1, "max_combo": 3, "duration": 12, "sliced": 8, "missed": 1, "bombs": 4})
     assert second["ok"] and not second["is_best"]
     state = store.state()
     assert state["best"]["score"] == 120 and state["totals"]["runs"] == 2
     assert state["totals"]["sliced"] == 18 and len(state["recent"]) == 2
+    assert state["totals"]["bombs"] == 4 and state["best"]["bombs"] == 0
     owned = {b["key"] for b in state["badges"] if b["owned"]}
     assert "game:first_slice" in owned and "game:score100" in owned
+    # 下发的徽章必须带齐前端要的字段；已获得的进度必须满值
+    for badge in state["badges"]:
+        for field in ("icon", "group", "tier", "progress"):
+            assert field in badge, badge["key"] + " 缺字段 " + field
+        prog = badge["progress"]
+        assert 0 <= prog["have"] <= prog["need"], badge["key"]
+        # 已获得的前端不画进度条，但数值也得是满的（手稳类按最高分那局估，可能不满）
+        if badge["owned"] and badge["key"] in ("game:first_slice", "game:score100"):
+            assert prog["have"] >= prog["need"] > 0, badge["key"]
+    # 分组计数：总和 = 徽章总数
+    assert sum(g["total"] for g in state["badge_groups"]) == len(state["badges"])
+    assert sum(g["owned"] for g in state["badge_groups"]) == len(owned)
     # 坏文件降级为空记录：可以没记录，不能玩不了
     (tmp_path / "games.json").write_text("{not json", encoding="utf-8")
     assert store.state()["totals"]["runs"] == 0
+    # 旧版 games.json（没有 bombs 字段）也要能读
+    (tmp_path / "games.json").write_text(json.dumps(
+        {"fruit": {"runs": [{"score": 10, "sliced": 2, "missed": 1}], "badges": ["game:first_slice"]}}),
+        encoding="utf-8")
+    old = store.state()
+    assert old["totals"]["bombs"] == 0 and old["best"]["bombs"] == 0
+    assert old["badges"][0]["owned"] and not old["badges"][1]["owned"]
 
 
 def test_pad_audio_scan_and_traversal(tmp_path):

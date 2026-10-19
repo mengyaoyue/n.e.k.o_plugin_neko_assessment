@@ -308,7 +308,6 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 .fr-box .stats{margin:12px 0 0}
 .fr-line{font-size:var(--fs-sm);color:#3f3859;margin:3px 0}
 .fr-line b{font-family:var(--font-ui)}
-#fr-badges .badge{min-height:52px}
 
 .mk-stage{
   position:relative;width:100%;aspect-ratio:16 / 9;border-radius:16px;overflow:hidden;
@@ -347,13 +346,43 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
   padding:10px 12px;text-align:center}
 .stats .stat b{display:block;font-family:var(--font-ui);font-size:var(--fs-lg);color:#3a3260}
 .stats .stat span{color:var(--dim);font-size:var(--fs-2xs)}
-.badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
-.badge{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.7);border:1px solid var(--line);
-  border-radius:14px;padding:8px 11px;min-height:52px}
-.badge .ico{font-size:calc(var(--fs) * 1.3);flex:none}
-.badge b{display:block;font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-sm)}
-.badge span{display:block;color:var(--dim);font-size:var(--fs-2xs);line-height:1.5}
-.badge.locked{opacity:.55;filter:saturate(.6)}
+.bhead{display:flex;align-items:center;gap:10px;margin:13px 0 4px}
+.bhead .progress{flex:1;margin:0}
+.bhead .progress i{transition:width .5s ease}
+.bgroup{display:flex;align-items:center;gap:9px;margin:13px 0 7px;
+  font-family:var(--font-ui);font-size:var(--fs-sm);color:#3a3260}
+.bgroup::after{content:"";flex:1;height:1px;background:var(--line)}
+.bgroup em{font-style:normal;color:var(--dim);font-size:var(--fs-2xs);font-family:var(--font-body)}
+.badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:9px}
+.badge{position:relative;display:flex;gap:10px;align-items:flex-start;overflow:hidden;
+  background:rgba(255,255,255,.7);border:1px solid var(--line);border-radius:14px;
+  padding:9px 11px;min-height:58px;transition:.18s}
+.badge .b-ico{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;
+  flex:none;font-size:calc(var(--fs) * 1.1);background:rgba(120,116,150,.14)}
+.badge .b-ico span{filter:grayscale(1);opacity:.45}
+.badge .b-tx{flex:1;min-width:0}
+.badge .b-tx b{display:block;font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-sm)}
+.badge .b-note{display:block;color:var(--dim);font-size:var(--fs-2xs);line-height:1.5}
+.badge .b-prog{height:5px;border-radius:99px;background:rgba(109,92,224,.14);
+  overflow:hidden;margin-top:6px}
+.badge .b-prog i{display:block;height:100%;border-radius:99px;
+  background:linear-gradient(90deg,#8d7ff3,#6d5ce0);transition:width .5s ease}
+.badge .b-num{font-size:var(--fs-2xs);color:var(--dim);font-family:var(--font-mono);margin-top:2px}
+.badge.owned{background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(246,243,255,.86));
+  border-color:rgba(124,108,240,.42);box-shadow:0 4px 14px rgba(109,92,224,.12)}
+.badge.owned .b-ico span{filter:none;opacity:1}
+.badge.owned[data-tier="1"] .b-ico{background:linear-gradient(180deg,#a9e7b3,#63c384)}
+.badge.owned[data-tier="2"] .b-ico{background:linear-gradient(180deg,#b3a8f7,#7d6fe8)}
+.badge.owned[data-tier="3"] .b-ico{background:linear-gradient(180deg,#ffd98a,#f5a623)}
+.badge .b-done{position:absolute;top:0;right:0;padding:2px 8px;border-radius:0 14px 0 10px;
+  background:rgba(124,108,240,.12);color:#6d5ce0;font-size:var(--fs-2xs);font-family:var(--font-ui)}
+.badge.just{animation:bpop .55s ease}
+@keyframes bpop{0%{transform:scale(1)}35%{transform:scale(1.06)}100%{transform:scale(1)}}
+#fr-gained{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:8px 0 0}
+#fr-gained:empty{display:none}
+.gchip{display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border-radius:999px;
+  background:linear-gradient(180deg,#8d7ff3,#6d5ce0);color:#fff;font-size:var(--fs-sm);
+  font-family:var(--font-ui);box-shadow:0 4px 12px rgba(109,92,224,.28)}
 .link{display:flex;align-items:baseline;gap:8px;padding:6px 2px;border-bottom:1px solid var(--edge);
   font-size:var(--fs-sm);flex-wrap:wrap}
 .link b{color:#3a3260}
@@ -660,8 +689,11 @@ details.cm-paste textarea:focus{border-color:var(--accent);
               <span class="muted" id="fr-best">最高分：0</span>
             </div>
             <div class="stats" id="fr-stats"></div>
-            <div class="muted" style="margin:13px 0 7px">游戏成就 <b id="fr-badge-count">0/0</b></div>
-            <div class="badges" id="fr-badges"></div>
+            <div class="bhead">
+              <span class="muted">游戏成就 <b id="fr-badge-count">0/0</b><em id="fr-badge-pct"></em></span>
+              <div class="progress"><i id="fr-badge-bar" style="width:0%"></i></div>
+            </div>
+            <div id="fr-badges"></div>
             <details class="more">
               <summary>最近几局</summary>
               <div id="fr-recent" style="margin-top:8px"></div>
@@ -2989,7 +3021,7 @@ const fruitGame = (() => {
       running: false, over: false, submitted: false,
       score: 0, level: 1, lives: rules.lives,
       combo: 0, comboTimer: 0, maxCombo: 0,
-      sliced: 0, missed: 0, elapsed: 0,
+      sliced: 0, missed: 0, bombs: 0, elapsed: 0,
       spawnTimer: 0.5, fruits: [], halves: [], parts: [], shake: 0,
     };
   }
@@ -3062,6 +3094,7 @@ const fruitGame = (() => {
     if (fruit.dead) return;
     fruit.dead = true;
     if (fruit.bomb){
+      st.bombs += 1;
       st.lives -= 1;
       st.combo = 0;
       st.shake = 1;
@@ -3273,6 +3306,7 @@ const fruitGame = (() => {
       duration: Math.floor(st.elapsed * 10) / 10,
       sliced: st.sliced,
       missed: st.missed,
+      bombs: st.bombs,
     };
     $('fr-title').textContent = '这一局结束';
     $('fr-sub').textContent = `${run.sliced} 个水果，漏了 ${run.missed} 个，最长连击 ${run.maxCombo}`;
@@ -3294,19 +3328,39 @@ const fruitGame = (() => {
         if (res.state) renderRecords(res.state);
         return;
       }
-      renderRecords(res.state);
-      const bits = [];
-      if (res.is_best) bits.push('🏆 新纪录！');
-      if ((res.gained_titles || []).length) bits.push('新成就：' + res.gained_titles.join('、'));
-      $('fr-gained').innerHTML = bits.length ? `<b>${esc(bits.join('　'))}</b>` : '';
+      const gained = res.gained_badges && res.gained_badges.length
+        ? res.gained_badges
+        : (res.gained_titles || []).map((title) => ({title}));
+      renderRecords(res.state, new Set(res.gained || []));
+      $('fr-gained').innerHTML = gained.length
+        ? gained.map((g) => `<span class="gchip">${esc(g.icon || '🏅')} ${esc(g.title || '')}</span>`).join('')
+        : '';
       statusOf($('st-fruit'), true, res.is_best ? '新纪录' : '已记录');
       if (res.is_best) floatText('🏆 新纪录！', {x: window.innerWidth - 170, y: 140});
+      else if (gained.length) floatText(`${gained[0].icon || '🏅'} ${gained[0].title}`, {x: window.innerWidth - 200, y: 140});
     } catch (err) {
       statusOf($('st-fruit'), false, String(err));
     }
   }
 
-  function renderRecords(state){
+  function badgeCard(item, just){
+    const prog = item.progress || {};
+    const locked = !item.owned;
+    const hasProg = locked && prog.need > 0;
+    const pct = hasProg ? Math.max(0, Math.min(100, Math.round((prog.have || 0) / prog.need * 100))) : 0;
+    return `<div class="badge ${item.owned ? 'owned' : 'locked'}${just ? ' just' : ''}" data-tier="${item.tier || 1}">
+      <span class="b-ico"><span>${esc(item.owned ? (item.icon || '🏅') : (item.icon || '🔒'))}</span></span>
+      <div class="b-tx">
+        <b>${esc(item.title)}</b>
+        <span class="b-note">${esc(item.note)}</span>
+        ${hasProg ? `<div class="b-prog"><i style="width:${pct}%"></i></div>
+          <div class="b-num">${prog.have || 0}/${prog.need}</div>` : ''}
+      </div>
+      ${item.owned ? '<span class="b-done">已获得</span>' : ''}
+    </div>`;
+  }
+
+  function renderRecords(state, just){
     if (!state) return;
     const best = state.best || {};
     const totals = state.totals || {};
@@ -3316,15 +3370,32 @@ const fruitGame = (() => {
       <div class="stat"><b>${best.max_combo || 0}</b><span>最长连击</span></div>
       <div class="stat"><b>${totals.runs || 0}</b><span>玩过局数</span></div>
       <div class="stat"><b>${totals.sliced || 0}</b><span>累计切中</span></div>
+      <div class="stat"><b>${totals.bombs || 0}</b><span>累计切到炸弹</span></div>
       <div class="stat"><b>${(best.duration || 0).toFixed ? best.duration.toFixed(0) : 0}</b><span>单局最长(秒)</span></div>`;
     const badges = state.badges || [];
     const owned = badges.filter((item) => item.owned).length;
     $('fr-badge-count').textContent = `${owned}/${badges.length}`;
-    $('fr-badges').innerHTML = badges.map((item) => `
-      <div class="badge ${item.owned ? '' : 'locked'}">
-        <span class="ico">${item.owned ? '🏅' : '🔒'}</span>
-        <div><b>${esc(item.title)}</b><span>${esc(item.note)}</span></div>
-      </div>`).join('');
+    const pct = badges.length ? Math.round(owned / badges.length * 100) : 0;
+    $('fr-badge-pct').textContent = pct ? `　完成度 ${pct}%` : '';
+    $('fr-badge-bar').style.width = pct + '%';
+    // 分组与顺序由后端给（badge_groups），前端不自己抄一份顺序
+    const groups = (state.badge_groups && state.badge_groups.length)
+      ? state.badge_groups
+      : [{key: 'all', name: '全部成就', total: badges.length, owned}];
+    const byGroup = {};
+    for (const item of badges){
+      const key = item.group || 'all';
+      if (!byGroup[key]) byGroup[key] = [];
+      byGroup[key].push(item);
+    }
+    const justSet = just || new Set();
+    $('fr-badges').innerHTML = groups.map((grp) => {
+      const list = byGroup[grp.key] || [];
+      if (!list.length) return '';
+      const got = list.filter((item) => item.owned).length;
+      return `<div class="bgroup">${esc(grp.name)}<em>${got}/${list.length}</em></div>
+        <div class="badges">${list.map((item) => badgeCard(item, justSet.has(item.key))).join('')}</div>`;
+    }).join('');
     const recent = state.recent || [];
     $('fr-recent').innerHTML = recent.length
       ? recent.map((row) => `<div class="link"><b>${row.score} 分</b>

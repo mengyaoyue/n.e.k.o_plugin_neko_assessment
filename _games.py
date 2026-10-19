@@ -77,15 +77,55 @@ def difficulty(level: int) -> dict[str, float]:
 
 
 # ── 游戏成就 ────────────────────────────────────────────────
+# 分组（前端按这个顺序渲染，名字也在这里给，免得 JS 里再抄一份）：
+BADGE_GROUPS: tuple[tuple[str, str], ...] = (
+    ("start", "初上手"),
+    ("skill", "刀法"),
+    ("endure", "毅力"),
+    ("grind", "累积"),
+)
+_BADGE_GROUP_NAMES = dict(BADGE_GROUPS)
+
+# tier 只决定"已获得"时图标砖的配色（1 绿 / 2 紫 / 3 金），不影响判定。
 GAME_BADGES: tuple[dict, ...] = (
-    {"key": "game:first_slice", "title": "第一刀", "note": "第一次切开水果。"},
-    {"key": "game:score100", "title": "破百", "note": "单局拿到 100 分。"},
-    {"key": "game:score500", "title": "果王", "note": "单局拿到 500 分。"},
-    {"key": "game:combo8", "title": "连击达人", "note": "一次连击切中 8 个以上。"},
-    {"key": "game:flawless", "title": "手稳", "note": "单局切中 20 个以上且一个都没漏。"},
-    {"key": "game:endure90", "title": "持久", "note": "单局存活超过 90 秒。"},
-    {"key": "game:total1000", "title": "千果", "note": "累计切中 1000 个水果。"},
-    {"key": "game:level10", "title": "果园主", "note": "单局打到 10 级。"},
+    # ── 初上手 ──
+    {"key": "game:first_slice", "title": "第一刀", "note": "第一次切开水果。",
+     "icon": "🍉", "group": "start", "tier": 1},
+    {"key": "game:score100", "title": "破百", "note": "单局拿到 100 分。",
+     "icon": "💯", "group": "start", "tier": 1},
+    {"key": "game:runs5", "title": "常来果盘", "note": "玩满 5 局。",
+     "icon": "🎮", "group": "start", "tier": 1},
+    # ── 刀法 ──
+    {"key": "game:combo8", "title": "连击达人", "note": "一次连击切中 8 个以上。",
+     "icon": "⚡", "group": "skill", "tier": 2},
+    {"key": "game:combo16", "title": "刀刀连环", "note": "一次连击切中 16 个以上。",
+     "icon": "🌟", "group": "skill", "tier": 3},
+    {"key": "game:flawless", "title": "手稳", "note": "单局切中 20 个以上且一个都没漏。",
+     "icon": "✋", "group": "skill", "tier": 2},
+    {"key": "game:flawless50", "title": "滴水不漏", "note": "单局切中 50 个以上且一个都没漏。",
+     "icon": "🛡️", "group": "skill", "tier": 3},
+    {"key": "game:score500", "title": "果王", "note": "单局拿到 500 分。",
+     "icon": "👑", "group": "skill", "tier": 2},
+    {"key": "game:score1000", "title": "千分一刀", "note": "单局拿到 1000 分。",
+     "icon": "🗡️", "group": "skill", "tier": 3},
+    # ── 毅力 ──
+    {"key": "game:endure90", "title": "持久", "note": "单局存活超过 90 秒。",
+     "icon": "⏱️", "group": "endure", "tier": 2},
+    {"key": "game:endure180", "title": "马拉松", "note": "单局存活超过 3 分钟。",
+     "icon": "🏃", "group": "endure", "tier": 3},
+    {"key": "game:level10", "title": "果园主", "note": "单局打到 10 级。",
+     "icon": "🌳", "group": "endure", "tier": 2},
+    {"key": "game:level20", "title": "满级果王", "note": "单局打到 20 级（满级）。",
+     "icon": "🏔️", "group": "endure", "tier": 3},
+    # ── 累积 ──
+    {"key": "game:total1000", "title": "千果", "note": "累计切中 1000 个水果。",
+     "icon": "🧺", "group": "grind", "tier": 2},
+    {"key": "game:total5000", "title": "万果仓", "note": "累计切中 5000 个水果。",
+     "icon": "📦", "group": "grind", "tier": 3},
+    {"key": "game:runs20", "title": "老果农", "note": "玩满 20 局。",
+     "icon": "🧑‍🌾", "group": "grind", "tier": 2},
+    {"key": "game:bomb_total20", "title": "炸弹克星", "note": "累计切到 20 个炸弹，而且还在接着玩。",
+     "icon": "💣", "group": "grind", "tier": 2},
 )
 GAME_BADGE_BY_KEY = {spec["key"]: spec for spec in GAME_BADGES}
 
@@ -103,7 +143,10 @@ def judge_run(run: dict[str, Any], totals: dict[str, Any]) -> list[str]:
     duration = float(run.get("duration") or 0)
     sliced = int(run.get("sliced") or 0)
     missed = int(run.get("missed") or 0)
+    bombs = int(run.get("bombs") or 0)
     total_sliced = int(totals.get("sliced") or 0) + sliced
+    total_runs = int(totals.get("runs") or 0) + 1
+    total_bombs = int(totals.get("bombs") or 0) + bombs
 
     if sliced >= 1:
         gained.append("game:first_slice")
@@ -111,17 +154,74 @@ def judge_run(run: dict[str, Any], totals: dict[str, Any]) -> list[str]:
         gained.append("game:score100")
     if score >= 500:
         gained.append("game:score500")
+    if score >= 1000:
+        gained.append("game:score1000")
     if combo >= 8:
         gained.append("game:combo8")
+    if combo >= 16:
+        gained.append("game:combo16")
     if sliced >= 20 and missed == 0:
         gained.append("game:flawless")
+    if sliced >= 50 and missed == 0:
+        gained.append("game:flawless50")
     if duration >= 90:
         gained.append("game:endure90")
-    if total_sliced >= 1000:
-        gained.append("game:total1000")
+    if duration >= 180:
+        gained.append("game:endure180")
     if level >= 10:
         gained.append("game:level10")
+    if level >= 20:
+        gained.append("game:level20")
+    if total_sliced >= 1000:
+        gained.append("game:total1000")
+    if total_sliced >= 5000:
+        gained.append("game:total5000")
+    if total_runs >= 5:
+        gained.append("game:runs5")
+    if total_runs >= 20:
+        gained.append("game:runs20")
+    if total_bombs >= 20:
+        gained.append("game:bomb_total20")
     return gained
+
+
+# 每个徽章的进度怎么算：("best"|"totals", 字段名, 目标值)。
+# 前端拿 badge_progress() 的结果在未获得的徽章上画进度条。
+_PROGRESS_SPEC: dict[str, tuple[str, str, int]] = {
+    "game:first_slice": ("totals", "sliced", 1),
+    "game:score100": ("best", "score", 100),
+    "game:score500": ("best", "score", 500),
+    "game:score1000": ("best", "score", 1000),
+    "game:combo8": ("best", "max_combo", 8),
+    "game:combo16": ("best", "max_combo", 16),
+    "game:flawless": ("best", "sliced", 20),
+    "game:flawless50": ("best", "sliced", 50),
+    "game:endure90": ("best", "duration", 90),
+    "game:endure180": ("best", "duration", 180),
+    "game:level10": ("best", "level", 10),
+    "game:level20": ("best", "level", 20),
+    "game:total1000": ("totals", "sliced", 1000),
+    "game:total5000": ("totals", "sliced", 5000),
+    "game:runs5": ("totals", "runs", 5),
+    "game:runs20": ("totals", "runs", 20),
+    "game:bomb_total20": ("totals", "bombs", 20),
+}
+
+
+def badge_progress(key: str, best: dict[str, Any], totals: dict[str, Any]) -> dict[str, int]:
+    """这个徽章现在到哪了：``{"have": 现在, "need": 目标}``，两端都夹在合法范围。
+
+    手稳类（一个都没漏）按**最高分那局**估算：那局漏过就显示 0——宁可保守，
+    也不要把"差一点"说成"快到了"。没有进度的徽章返回 need=0。
+    """
+    spec = _PROGRESS_SPEC.get(key)
+    if spec is None:
+        return {"have": 0, "need": 0}
+    src, field, need = spec
+    raw = int((best if src == "best" else totals).get(field) or 0)
+    if key in ("game:flawless", "game:flawless50") and int(best.get("missed") or 0) > 0:
+        raw = 0
+    return {"have": max(0, min(raw, need)), "need": need}
 
 
 # ── 本地音源（可选）：让用户自己放采样进来 ────────────────────────
@@ -216,16 +316,19 @@ class GameStore:
             "runs": len(runs),
             "sliced": sum(int(r.get("sliced") or 0) for r in runs if isinstance(r, dict)),
             "missed": sum(int(r.get("missed") or 0) for r in runs if isinstance(r, dict)),
+            "bombs": sum(int(r.get("bombs") or 0) for r in runs if isinstance(r, dict)),
+        }
+        best_clean = {
+            "score": int(best.get("score") or 0),
+            "level": int(best.get("level") or 0),
+            "max_combo": int(best.get("max_combo") or 0),
+            "duration": float(best.get("duration") or 0),
+            "sliced": int(best.get("sliced") or 0),
+            "missed": int(best.get("missed") or 0),
+            "bombs": int(best.get("bombs") or 0),
         }
         return {
-            "best": {
-                "score": int(best.get("score") or 0),
-                "level": int(best.get("level") or 0),
-                "max_combo": int(best.get("max_combo") or 0),
-                "duration": float(best.get("duration") or 0),
-                "sliced": int(best.get("sliced") or 0),
-                "missed": int(best.get("missed") or 0),
-            },
+            "best": best_clean,
             "totals": totals,
             "recent": [
                 {
@@ -235,13 +338,32 @@ class GameStore:
                     "duration": float(r.get("duration") or 0),
                     "sliced": int(r.get("sliced") or 0),
                     "missed": int(r.get("missed") or 0),
+                    "bombs": int(r.get("bombs") or 0),
                 }
                 for r in runs[:6]
                 if isinstance(r, dict)
             ],
             "badges": [
-                {"key": spec["key"], "title": spec["title"], "note": spec["note"], "owned": spec["key"] in owned}
+                {
+                    "key": spec["key"],
+                    "title": spec["title"],
+                    "note": spec["note"],
+                    "icon": spec["icon"],
+                    "group": spec["group"],
+                    "tier": spec["tier"],
+                    "owned": spec["key"] in owned,
+                    "progress": badge_progress(spec["key"], best_clean, totals),
+                }
                 for spec in GAME_BADGES
+            ],
+            "badge_groups": [
+                {
+                    "key": key,
+                    "name": name,
+                    "total": sum(1 for s in GAME_BADGES if s["group"] == key),
+                    "owned": sum(1 for s in GAME_BADGES if s["group"] == key and s["key"] in owned),
+                }
+                for key, name in BADGE_GROUPS
             ],
             "note": "游戏成绩与测评记录是两条线：玩这个不会写进任何测评结果。",
         }
@@ -255,6 +377,7 @@ class GameStore:
             "duration": max(0.0, float(run.get("duration") or 0.0)),
             "sliced": max(0, int(run.get("sliced") or 0)),
             "missed": max(0, int(run.get("missed") or 0)),
+            "bombs": max(0, int(run.get("bombs") or 0)),
             "created": time.time(),
         }
         with self._lock:
@@ -264,6 +387,7 @@ class GameStore:
             before = {
                 "runs": len(runs),
                 "sliced": sum(int(r.get("sliced") or 0) for r in runs if isinstance(r, dict)),
+                "bombs": sum(int(r.get("bombs") or 0) for r in runs if isinstance(r, dict)),
             }
             best_before = int((node.get("best") or {}).get("score") or 0) if isinstance(node.get("best"), dict) else 0
             gained: list[str] = []
@@ -273,7 +397,7 @@ class GameStore:
                 node["runs"] = runs
                 if payload["score"] > best_before:
                     node["best"] = {k: payload[k] for k in
-                                    ("score", "level", "max_combo", "duration", "sliced", "missed")}
+                                    ("score", "level", "max_combo", "duration", "sliced", "missed", "bombs")}
                 owned = set(node.get("badges") or [])
                 for key in judge_run(payload, before):
                     if key in GAME_BADGE_BY_KEY and key not in owned:
@@ -290,6 +414,10 @@ class GameStore:
             "run": {k: v for k, v in payload.items() if k != "created"},
             "gained": gained,
             "gained_titles": [GAME_BADGE_BY_KEY[key]["title"] for key in gained if key in GAME_BADGE_BY_KEY],
+            "gained_badges": [
+                {"key": key, "title": GAME_BADGE_BY_KEY[key]["title"], "icon": GAME_BADGE_BY_KEY[key]["icon"]}
+                for key in gained if key in GAME_BADGE_BY_KEY
+            ],
             "is_best": payload["score"] > best_before,
             "best_before": best_before,
             "state": self.state(game),
@@ -318,6 +446,7 @@ def pad_audio_asset(data_dir: Any, name: str) -> Optional[tuple[bytes, str]]:
 
 __all__ = [
     "AUDIO_EXTS",
+    "BADGE_GROUPS",
     "BOMB",
     "FRUITS",
     "GAME_BADGES",
@@ -325,6 +454,7 @@ __all__ = [
     "GAME_FRUIT",
     "GameStore",
     "PAD_AUDIO_DIR",
+    "badge_progress",
     "difficulty",
     "judge_run",
     "level_of",
