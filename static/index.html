@@ -3378,10 +3378,17 @@ const fruitGame = (() => {
     const pct = badges.length ? Math.round(owned / badges.length * 100) : 0;
     $('fr-badge-pct').textContent = pct ? `　完成度 ${pct}%` : '';
     $('fr-badge-bar').style.width = pct + '%';
-    // 分组与顺序由后端给（badge_groups），前端不自己抄一份顺序
-    const groups = (state.badge_groups && state.badge_groups.length)
-      ? state.badge_groups
-      : [{key: 'all', name: '全部成就', total: badges.length, owned}];
+    // 分组与顺序由后端给（badge_groups），前端不自己抄一份顺序；
+    // 后端没给（旧数据）就按徽章自身的 group 字段现场归组，别变成空白。
+    let groups = state.badge_groups;
+    if (!groups || !groups.length){
+      const seen = [];
+      for (const item of badges){
+        const key = item.group || 'all';
+        if (!seen.includes(key)) seen.push(key);
+      }
+      groups = seen.map((key) => ({key, name: key === 'all' ? '全部成就' : key}));
+    }
     const byGroup = {};
     for (const item of badges){
       const key = item.group || 'all';
