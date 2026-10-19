@@ -346,9 +346,6 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
   padding:10px 12px;text-align:center}
 .stats .stat b{display:block;font-family:var(--font-ui);font-size:var(--fs-lg);color:#3a3260}
 .stats .stat span{color:var(--dim);font-size:var(--fs-2xs)}
-.bhead{display:flex;align-items:center;gap:10px;margin:13px 0 4px}
-.bhead .progress{flex:1;margin:0}
-.bhead .progress i{transition:width .5s ease}
 .bgroup{display:flex;align-items:center;gap:9px;margin:13px 0 7px;
   font-family:var(--font-ui);font-size:var(--fs-sm);color:#3a3260}
 .bgroup::after{content:"";flex:1;height:1px;background:var(--line)}
@@ -357,9 +354,11 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 .badge{position:relative;display:flex;gap:10px;align-items:flex-start;overflow:hidden;
   background:rgba(255,255,255,.7);border:1px solid var(--line);border-radius:14px;
   padding:9px 11px;min-height:58px;transition:.18s}
-.badge .b-ico{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;
-  flex:none;font-size:calc(var(--fs) * 1.1);background:rgba(120,116,150,.14)}
-.badge .b-ico span{filter:grayscale(1);opacity:.45}
+/* 图标砖：SVG 线性图标，颜色由 color 决定（已获得=白，未获得=灰），不用 emoji */
+.badge .b-ico{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;
+  flex:none;color:var(--dim);background:rgba(120,116,150,.13)}
+.badge .b-ico svg{width:calc(var(--fs) * 1.15);height:calc(var(--fs) * 1.15);display:block}
+.badge .b-ico span{font-size:calc(var(--fs) * 1.05);filter:grayscale(1);opacity:.5}
 .badge .b-tx{flex:1;min-width:0}
 .badge .b-tx b{display:block;font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-sm)}
 .badge .b-note{display:block;color:var(--dim);font-size:var(--fs-2xs);line-height:1.5}
@@ -370,7 +369,7 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 .badge .b-num{font-size:var(--fs-2xs);color:var(--dim);font-family:var(--font-mono);margin-top:2px}
 .badge.owned{background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(246,243,255,.86));
   border-color:rgba(124,108,240,.42);box-shadow:0 4px 14px rgba(109,92,224,.12)}
-.badge.owned .b-ico span{filter:none;opacity:1}
+.badge.owned .b-ico{color:#fff}
 .badge.owned[data-tier="1"] .b-ico{background:linear-gradient(180deg,#a9e7b3,#63c384)}
 .badge.owned[data-tier="2"] .b-ico{background:linear-gradient(180deg,#b3a8f7,#7d6fe8)}
 .badge.owned[data-tier="3"] .b-ico{background:linear-gradient(180deg,#ffd98a,#f5a623)}
@@ -383,6 +382,50 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 .gchip{display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border-radius:999px;
   background:linear-gradient(180deg,#8d7ff3,#6d5ce0);color:#fff;font-size:var(--fs-sm);
   font-family:var(--font-ui);box-shadow:0 4px 12px rgba(109,92,224,.28)}
+
+/* 成就入口条：点它进成就页（不再把 17 个徽章平铺在游戏页里） */
+.bentry{display:flex;align-items:center;gap:12px;width:100%;margin-top:13px;padding:10px 14px;
+  border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.72);
+  cursor:pointer;text-align:left;font-family:inherit;transition:.18s}
+.bentry:hover{border-color:rgba(124,108,240,.5);box-shadow:0 6px 18px rgba(109,92,224,.12)}
+.bentry-ico{width:38px;height:38px;border-radius:12px;flex:none;display:grid;place-items:center;
+  color:#fff;background:linear-gradient(180deg,#8d7ff3,#6d5ce0);
+  box-shadow:0 4px 12px rgba(109,92,224,.28)}
+.bentry-ico svg{width:calc(var(--fs) * 1.25);height:calc(var(--fs) * 1.25)}
+.bentry-main{flex:1;min-width:0}
+.bentry-main b{display:block;font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-in)}
+.bentry-sub{display:block;color:var(--dim);font-size:var(--fs-2xs);margin:1px 0 5px}
+.bentry-bar{display:block;height:5px;border-radius:99px;background:rgba(109,92,224,.14);overflow:hidden}
+.bentry-bar i{display:block;height:100%;border-radius:99px;
+  background:linear-gradient(90deg,#8d7ff3,#6d5ce0);transition:width .5s ease}
+.bentry-go{flex:none;color:var(--accent);font-size:var(--fs-sm);font-family:var(--font-ui)}
+
+/* 成就页：全屏浮层，Esc / ✕ / 点背景都能关 */
+.bpage{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:20px}
+.bpage[hidden]{display:none}
+.bpage-bg{position:absolute;inset:0;background:rgba(58,50,96,.34);backdrop-filter:blur(4px)}
+.bpage-box{position:relative;width:min(920px,100%);max-height:calc(100vh - 40px);
+  display:flex;flex-direction:column;overflow:hidden;
+  background:linear-gradient(180deg,rgba(255,255,255,.97),rgba(250,248,255,.97));
+  border:1px solid rgba(124,108,240,.32);border-radius:20px;
+  box-shadow:0 24px 60px rgba(50,40,110,.28)}
+.bpage-top{display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid var(--line)}
+.bpage-title{display:flex;align-items:center;gap:9px;font-family:var(--font-ui);color:#3a3260;
+  font-size:var(--fs-lg)}
+.bpage-trophy{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:#fff;
+  background:linear-gradient(180deg,#8d7ff3,#6d5ce0)}
+.bpage-trophy svg{width:calc(var(--fs) * 1.05);height:calc(var(--fs) * 1.05)}
+.bpage-num{margin-left:auto;color:var(--dim);font-size:var(--fs-sm);font-family:var(--font-mono)}
+.bpage-bar{height:7px;margin:12px 18px 0;border-radius:99px;background:rgba(109,92,224,.14);overflow:hidden}
+.bpage-bar i{display:block;height:100%;border-radius:99px;
+  background:linear-gradient(90deg,#8d7ff3,#6d5ce0);transition:width .5s ease}
+.bpage-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 18px 2px}
+.bpage-chips .chip{cursor:default;font-size:var(--fs-2xs);padding:3px 11px}
+.bpage-body{overflow:auto;padding:4px 18px 18px}
+.bpage-body .badges{grid-template-columns:repeat(auto-fill,minmax(224px,1fr))}
+.bpage-body .badge{min-height:64px}
+.bpage-body .badge .b-ico{width:38px;height:38px}
+.bpage-body .badge .b-ico svg{width:calc(var(--fs) * 1.25);height:calc(var(--fs) * 1.25)}
 .link{display:flex;align-items:baseline;gap:8px;padding:6px 2px;border-bottom:1px solid var(--edge);
   font-size:var(--fs-sm);flex-wrap:wrap}
 .link b{color:#3a3260}
@@ -689,11 +732,22 @@ details.cm-paste textarea:focus{border-color:var(--accent);
               <span class="muted" id="fr-best">最高分：0</span>
             </div>
             <div class="stats" id="fr-stats"></div>
-            <div class="bhead">
-              <span class="muted">游戏成就 <b id="fr-badge-count">0/0</b><em id="fr-badge-pct"></em></span>
-              <div class="progress"><i id="fr-badge-bar" style="width:0%"></i></div>
-            </div>
-            <div id="fr-badges"></div>
+            <button class="bentry" id="fr-badge-entry" type="button">
+              <span class="bentry-ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M7 3.5h10v5.2a5 5 0 0 1-10 0z"/>
+                  <path d="M7 5.2H4.6v1.6a3.4 3.4 0 0 0 3.4 3.4M17 5.2h2.4v1.6a3.4 3.4 0 0 1-3.4 3.4"/>
+                  <path d="M12 13.7v3.3M9.2 20.5h5.6M9.6 17h4.8l.6 3.5H9z"/>
+                </svg>
+              </span>
+              <span class="bentry-main">
+                <b>游戏成就</b>
+                <span class="bentry-sub" id="fr-badge-sub">还没打过</span>
+                <span class="bentry-bar"><i id="fr-badge-bar" style="width:0%"></i></span>
+              </span>
+              <span class="bentry-go">查看全部 ›</span>
+            </button>
             <details class="more">
               <summary>最近几局</summary>
               <div id="fr-recent" style="margin-top:8px"></div>
@@ -3343,13 +3397,45 @@ const fruitGame = (() => {
     }
   }
 
+  // 徽章图标：统一线性 SVG（24 视图 / 1.7 描边 / currentColor 上色）。
+  // 放前端是因为它纯视觉、要跟着「已获得=白、未获得=灰」变色；
+  // 后端下发的 emoji 只在缺图标时兜底，正常不走那条路。
+  const BADGE_ICONS = {
+    'game:first_slice': '<path d="M3.2 14.8a8.8 8.8 0 0 1 17.6 0z"/><path d="M8.6 16.6h.02M12 18.2h.02M15.4 16.6h.02"/>',
+    'game:score100': '<circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1"/>',
+    'game:runs5': '<ellipse cx="12" cy="14.6" rx="8.6" ry="3.1"/><circle cx="8.2" cy="9.6" r="1.7"/><circle cx="12" cy="7.8" r="2"/><circle cx="15.8" cy="9.6" r="1.7"/>',
+    'game:combo8': '<path d="M13.2 2.6 4.8 13.4h6.2l-1.8 8 8.8-11.2h-6.2z"/>',
+    'game:combo16': '<path d="M10.4 2.4 4.4 11h4.6l-1.4 6.4M18.6 4.6 14.4 11h3.4l-1 5.2"/>',
+    'game:flawless': '<path d="M3.6 11.4h16.8c0 5-3.8 8.6-8.4 8.6s-8.4-3.6-8.4-8.6z"/><path d="M7.4 8.2c1.6-1.3 3.2 1.3 4.8 0s3.2-1.3 4.8 0"/>',
+    'game:flawless50': '<path d="M12 2.8 4.6 5.6v6.1c0 5 3.2 8.4 7.4 10.1 4.2-1.7 7.4-5.1 7.4-10.1V5.6z"/><path d="m8.7 11.9 2.3 2.3 4.3-4.5"/>',
+    'game:score500': '<path d="M3.6 8.2l4.1 4L12 3.9l4.3 8.3 4.1-4-1.6 9.9H5.2z"/><path d="M5.6 18.1h12.8"/>',
+    'game:score1000': '<path d="M14.6 3.4 20.4 9.2 9.2 20.6H4.2v-5z"/><path d="M12.8 5.2 18.6 11"/>',
+    'game:endure90': '<path d="M6 3.4h12M6 20.6h12"/><path d="M7.6 3.4v3.6c0 2 4.4 3.4 4.4 5.9s-4.4 3.9-4.4 5.9v3.8M16.4 3.4v3.6c0 2-4.4 3.4-4.4 5.9s4.4 3.9 4.4 5.9v3.8"/>',
+    'game:endure180': '<circle cx="14.6" cy="4.4" r="2"/><path d="M13.4 7.6 8.2 12.4l4.6 2.4-2.4 6.6M13.4 7.6l5.2 2 2.6 3.6M12.8 14.8l3.6 2.6"/>',
+    'game:level10': '<path d="M12 3.4c-2.9 0-5.2 2.4-5.2 5.4 0 .9.2 1.7.6 2.4-2 .8-3.4 2.7-3.4 4.9 0 3 2.4 5.3 5.3 5.3h5.4c2.9 0 5.3-2.4 5.3-5.3 0-2.2-1.4-4.1-3.4-4.9.4-.7.6-1.5.6-2.4 0-3-2.3-5.4-5.2-5.4z"/><path d="M12 15.6v5.6"/>',
+    'game:level20': '<path d="M3 19.6 9.2 9.6l3.6 5 2.6-2.6 6.6 7.6z"/><path d="M9.2 9.6V3.2h5.2l-1.4 1.9 1.4 1.9H9.2z"/>',
+    'game:total1000': '<path d="M4.4 9.6h15.2l-1.7 9.3a2 2 0 0 1-2 1.7H8.1a2 2 0 0 1-2-1.7z"/><path d="M8.2 9.6a3.8 3.8 0 0 1 7.6 0"/>',
+    'game:total5000': '<path d="M3.6 10.4 12 4l8.4 6.4v9.2H3.6z"/><path d="M9.6 19.6v-5.2h4.8v5.2"/>',
+    'game:runs20': '<path d="M5 16.4c.8-4.6 3.8-7.6 7-7.6s6.2 3 7 7.6z"/><path d="M2.8 16.4h18.4"/>',
+    'game:bomb_total20': '<circle cx="9.8" cy="14.6" r="5.6"/><path d="M14 9.6c.9-2.1 2.5-3.5 4.6-4"/><path d="M17.4 3.2 18.9 1.8M19.6 5.6 21.4 5"/>',
+  };
+
+  function badgeIcon(item){
+    const body = BADGE_ICONS[item.key];
+    if (body){
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+    }
+    return `<span>${esc(item.icon || '🏅')}</span>`;   // 兜底：后端 emoji
+  }
+
   function badgeCard(item, just){
     const prog = item.progress || {};
     const locked = !item.owned;
     const hasProg = locked && prog.need > 0;
     const pct = hasProg ? Math.max(0, Math.min(100, Math.round((prog.have || 0) / prog.need * 100))) : 0;
     return `<div class="badge ${item.owned ? 'owned' : 'locked'}${just ? ' just' : ''}" data-tier="${item.tier || 1}">
-      <span class="b-ico"><span>${esc(item.owned ? (item.icon || '🏅') : (item.icon || '🔒'))}</span></span>
+      <span class="b-ico">${badgeIcon(item)}</span>
       <div class="b-tx">
         <b>${esc(item.title)}</b>
         <span class="b-note">${esc(item.note)}</span>
@@ -3360,26 +3446,10 @@ const fruitGame = (() => {
     </div>`;
   }
 
-  function renderRecords(state, just){
-    if (!state) return;
-    const best = state.best || {};
-    const totals = state.totals || {};
-    $('fr-best').textContent = `最高分：${best.score || 0}（${best.level ? 'Lv.' + best.level : '还没打过'}）`;
-    $('fr-stats').innerHTML = `
-      <div class="stat"><b>${best.score || 0}</b><span>最高分</span></div>
-      <div class="stat"><b>${best.max_combo || 0}</b><span>最长连击</span></div>
-      <div class="stat"><b>${totals.runs || 0}</b><span>玩过局数</span></div>
-      <div class="stat"><b>${totals.sliced || 0}</b><span>累计切中</span></div>
-      <div class="stat"><b>${totals.bombs || 0}</b><span>累计切到炸弹</span></div>
-      <div class="stat"><b>${(best.duration || 0).toFixed ? best.duration.toFixed(0) : 0}</b><span>单局最长(秒)</span></div>`;
+  // 分组成套渲染（成就页用）：分组与顺序由后端 badge_groups 给，前端不抄；
+  // 后端没给（旧数据）就按徽章自身的 group 字段现场归组，别变成空白。
+  function badgeGroupsHtml(state, justSet){
     const badges = state.badges || [];
-    const owned = badges.filter((item) => item.owned).length;
-    $('fr-badge-count').textContent = `${owned}/${badges.length}`;
-    const pct = badges.length ? Math.round(owned / badges.length * 100) : 0;
-    $('fr-badge-pct').textContent = pct ? `　完成度 ${pct}%` : '';
-    $('fr-badge-bar').style.width = pct + '%';
-    // 分组与顺序由后端给（badge_groups），前端不自己抄一份顺序；
-    // 后端没给（旧数据）就按徽章自身的 group 字段现场归组，别变成空白。
     let groups = state.badge_groups;
     if (!groups || !groups.length){
       const seen = [];
@@ -3395,19 +3465,70 @@ const fruitGame = (() => {
       if (!byGroup[key]) byGroup[key] = [];
       byGroup[key].push(item);
     }
-    const justSet = just || new Set();
-    $('fr-badges').innerHTML = groups.map((grp) => {
+    return groups.map((grp) => {
       const list = byGroup[grp.key] || [];
       if (!list.length) return '';
       const got = list.filter((item) => item.owned).length;
       return `<div class="bgroup">${esc(grp.name)}<em>${got}/${list.length}</em></div>
         <div class="badges">${list.map((item) => badgeCard(item, justSet.has(item.key))).join('')}</div>`;
     }).join('');
+  }
+
+  let lastGameState = null;   // 最近一次拿到的战绩（成就页开着时要跟着刷新）
+
+  function renderRecords(state, just){
+    if (!state) return;
+    lastGameState = state;
+    const best = state.best || {};
+    const totals = state.totals || {};
+    $('fr-best').textContent = `最高分：${best.score || 0}（${best.level ? 'Lv.' + best.level : '还没打过'}）`;
+    $('fr-stats').innerHTML = `
+      <div class="stat"><b>${best.score || 0}</b><span>最高分</span></div>
+      <div class="stat"><b>${best.max_combo || 0}</b><span>最长连击</span></div>
+      <div class="stat"><b>${totals.runs || 0}</b><span>玩过局数</span></div>
+      <div class="stat"><b>${totals.sliced || 0}</b><span>累计切中</span></div>
+      <div class="stat"><b>${totals.bombs || 0}</b><span>累计切到炸弹</span></div>
+      <div class="stat"><b>${(best.duration || 0).toFixed ? best.duration.toFixed(0) : 0}</b><span>单局最长(秒)</span></div>`;
+    // 成就不再平铺：游戏页只放一条入口（计数 + 迷你进度条），点它进成就页
+    const badges = state.badges || [];
+    const owned = badges.filter((item) => item.owned).length;
+    const pct = badges.length ? Math.round(owned / badges.length * 100) : 0;
+    $('fr-badge-sub').textContent = badges.length
+      ? `已获得 ${owned}/${badges.length}${pct ? ' · 完成度 ' + pct + '%' : ''}`
+      : '还没打过';
+    $('fr-badge-bar').style.width = pct + '%';
+    if (!$('fr-badge-page').hidden) renderBadgePage(state, just);   // 开着就同步重画
     const recent = state.recent || [];
     $('fr-recent').innerHTML = recent.length
       ? recent.map((row) => `<div class="link"><b>${row.score} 分</b>
           <span>Lv.${row.level}　连击 ${row.max_combo}　${row.sliced} 个　${(row.duration || 0).toFixed(1)} 秒</span></div>`).join('')
       : '<div class="muted">还没有战绩，先打一局。</div>';
+  }
+
+  // ── 成就页（全屏浮层）────────────────────────────────────
+  function renderBadgePage(state, just){
+    if (!state) return;
+    const badges = state.badges || [];
+    const owned = badges.filter((item) => item.owned).length;
+    const pct = badges.length ? Math.round(owned / badges.length * 100) : 0;
+    $('bp-count').textContent = `${owned}/${badges.length}`;
+    $('bp-bar').style.width = pct + '%';
+    const groups = (state.badge_groups && state.badge_groups.length) ? state.badge_groups : [];
+    $('bp-chips').innerHTML = groups.length
+      ? groups.map((g) => `<span class="chip">${esc(g.name)} ${g.owned || 0}/${g.total || 0}</span>`).join('')
+      : '';
+    $('bp-body').innerHTML = badgeGroupsHtml(state, just || new Set());
+  }
+
+  async function openBadgePage(){
+    $('fr-badge-page').hidden = false;
+    renderBadgePage(lastGameState);          // 先画手头的，别闪白
+    const fresh = await fetchState();        // 再取最新的盖上
+    if (fresh) renderBadgePage(fresh);
+  }
+
+  function closeBadgePage(){
+    $('fr-badge-page').hidden = true;
   }
 
   function pause(){
@@ -3473,6 +3594,13 @@ const fruitGame = (() => {
       start();
     };
     $('fr-restart').onclick = start;
+    // 成就页：入口进、✕/背景/Esc 出
+    $('fr-badge-entry').onclick = openBadgePage;
+    $('fr-badge-close').onclick = closeBadgePage;
+    $('fr-badge-bg').onclick = closeBadgePage;
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && !$('fr-badge-page').hidden) closeBadgePage();
+    });
     window.addEventListener('resize', () => { if (!$('card-fruit').classList.contains('hidden')) resize(); });
     let snap = null;
     try {
@@ -3907,5 +4035,30 @@ document.querySelectorAll('.tab').forEach((tab) => {
   $('crisis').innerHTML = CRISIS.map((l) => `<li>${esc(l)}</li>`).join('');
 })();
 </script>
+
+<!-- 成就页：点切水果卡里的「游戏成就」入口条进来；Esc / ✕ / 点背景都能关 -->
+<div class="bpage" id="fr-badge-page" hidden>
+  <div class="bpage-bg" id="fr-badge-bg"></div>
+  <div class="bpage-box" role="dialog" aria-modal="true" aria-label="游戏成就">
+    <div class="bpage-top">
+      <div class="bpage-title">
+        <span class="bpage-trophy">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 3.5h10v5.2a5 5 0 0 1-10 0z"/>
+            <path d="M7 5.2H4.6v1.6a3.4 3.4 0 0 0 3.4 3.4M17 5.2h2.4v1.6a3.4 3.4 0 0 1-3.4 3.4"/>
+            <path d="M12 13.7v3.3M9.2 20.5h5.6M9.6 17h4.8l.6 3.5H9z"/>
+          </svg>
+        </span>
+        <b>游戏成就</b>
+        <span class="bpage-num" id="bp-count">0/0</span>
+      </div>
+      <button class="ghost tiny" id="fr-badge-close" type="button">关闭</button>
+    </div>
+    <div class="bpage-bar"><i id="bp-bar" style="width:0%"></i></div>
+    <div class="bpage-chips" id="bp-chips"></div>
+    <div class="bpage-body" id="bp-body"></div>
+  </div>
+</div>
 </body>
 </html>

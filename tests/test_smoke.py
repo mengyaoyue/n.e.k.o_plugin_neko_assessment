@@ -882,29 +882,41 @@ def test_panel_trail_dual_listener_and_ripple():
 
 
 def test_panel_badge_system_rendered():
-    """切水果成就：分组 / 档位配色 / 进度条都得真的渲染出来。
+    """切水果成就：点入口进成就页（不再平铺），徽章用统一线性 SVG 图标。
 
-    用户原话「现在的不太好看」——重排成：分组小标题 + 图标砖（已获得按档位上色）
-    + 未获得画进度条。这里钉住结构，防止谁手滑改回平铺列表。
+    用户原话「图标不好看 / 平铺不美观 / 应该是点击成就进入成就页面那种」。
+    这里钉住：入口条结构、成就页浮层、三种关闭方式、以及
+    **每个后端徽章都必须有 SVG 图标**（漏一个就破图）。
     """
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    # 头部：完成度计数 + 总进度条
-    assert 'id="fr-badge-count"' in html and 'id="fr-badge-bar"' in html
-    assert 'id="fr-badge-pct"' in html
-    # 分组顺序由后端 badge_groups 给，前端不自己抄一份
-    assert "badge_groups" in html
-    assert "function badgeCard(" in html
-    card = re.search(r"function badgeCard\(.*?\n  \}", html, re.S).group(0)
-    assert "data-tier" in card, "档位决定配色，不能丢"
-    assert "b-prog" in card and "b-num" in card, "未获得的徽章要画进度条"
-    assert "esc(item.title)" in card and "esc(item.note)" in card, "后端字符串进 innerHTML 必须转义"
-    # 新成就用 chip 展示，并且提交后给新获得的徽章打 .just 放个动画
-    assert "gchip" in html
-    assert "renderRecords(res.state, new Set(res.gained" in html
-    # 徽章标题/备注/进度数字都不许写死 px 字号（必须由 --fs 派生）
+    games = _load("_games")
+    # 入口：一条可点的成就条（计数 + 迷你进度条），点它进成就页
+    assert 'id="fr-badge-entry"' in html and 'id="fr-badge-sub"' in html
+    assert 'id="fr-badge-bar"' in html
+    assert 'id="fr-badges"' not in html, "成就不再平铺在游戏页里"
+    # 成就页浮层 + 三种关闭方式（✕ / 背景 / Esc）
+    assert 'id="fr-badge-page"' in html and 'id="bp-body"' in html
+    assert 'id="fr-badge-close"' in html and 'id="fr-badge-bg"' in html
+    assert "function openBadgePage(" in html and "function closeBadgePage(" in html
+    assert "function renderBadgePage(" in html
+    assert "=== 'Escape'" in html, "Esc 要能关成就页"
+    assert "bpage[hidden]{display:none}" in html, "浮层靠 hidden 显隐，别让类选择器盖过 UA 样式"
+    # 徽章图标：后端每个 key 都要有 SVG，且字典里只放 path（svg 外壳由 badgeIcon 拼）
+    icons = re.search(r"const BADGE_ICONS = \{(.*?)\n  \};", html, re.S).group(1)
+    keys = re.findall(r"'(game:[a-z0-9_]+)'\s*:", icons)
+    for spec in games.GAME_BADGES:
+        assert spec["key"] in keys, spec["key"] + " 缺 SVG 图标"
+    assert len(keys) == len(set(keys)), "图标 key 重复"
+    assert icons.count("<svg") == 0, "字典里只放 path，外壳统一在 badgeIcon 里拼"
+    assert 'viewBox="0 0 24 24"' in html and 'stroke-width="1.7"' in html
+    # 图标着色走 currentColor：已获得=白、未获得=灰
+    assert ".badge.owned .b-ico{color:#fff}" in html
+    # emoji 只作兜底（缺图标时），徽章卡不许再直接渲染 emoji
+    assert "esc(item.owned ? (item.icon || '🏅')" not in html
+    # 新样式不许写死 px 字号（必须由 --fs 派生）
     css = re.search(r"<style>(.*?)</style>", html, re.S).group(1)
-    seg = css[css.index(".bhead{"):css.index("details.more{")]
-    assert "@keyframes bpop" in seg
+    seg = css[css.index(".bentry{"):css.index("details.more{")]
+    assert "@keyframes bpop" in css
     assert not re.search(r"font-size:\s*\d+(\.\d+)?px", seg), "新样式里不许写死 px 字号"
 
 
