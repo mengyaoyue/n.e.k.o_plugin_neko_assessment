@@ -1,9 +1,9 @@
 [plugin]
 name = "心理测评室"
-description = "心理测评 · 人格测评 · 趣味测评一个面板全包：大五人格（IPIP，Goldberg 公共领域题库，每因子 20 题）、16 型人格（OEJTS 1.2 原题）、职业兴趣（O*NET 霍兰德）、成人依恋、心理韧性，以及公开可复现的 PHQ-9 / GAD-7 / 孤独感简版；外加默契测试（题目发给她本人、她在真实对话里作答）、魔法分院、灵魂动物等纯娱乐小测。一题一屏、实时看维度剖面、结果可追踪趋势、可导出与生成分享卡。答案与结果只存在你本机的 data/，不上传、不联网。所有量表仅供自我了解与反思，不构成医学诊断。"
-short_description = "Personality, psychology and fun assessments in one panel: Big Five (public-domain IPIP/Goldberg pool), 16-type (OEJTS), O*NET career interests, attachment style, resilience, plus openly reproducible PHQ-9 / GAD-7 / loneliness screens and playful quizzes. One question at a time, live dimension profile, trend tracking, exportable results. Everything is scored and stored locally; not a medical diagnosis."
-keywords = ["心理测评", "psychology", "人格", "personality", "大五", "big five", "16型", "霍兰德", "career", "依恋", "attachment", "PHQ-9", "GAD-7", "焦虑", "趣味测试", "quiz", "测评", "assessment", "性格", "診断", "心理テスト", "성격", "심리테스트"]
-version = "1.0.0.2"
+description = "心理测评 · 人格测评 · 趣味测评，v1.4.0 一测一 UI，共 36 份：大五 30 分面（IPIP-NEO-120，公共领域）、性格优势 24 项（IPIP-VIA-R，公共领域）、大五 100 题、16 型（OEJTS 1.2）、职业兴趣六边形（O*NET 霍兰德）、九型九点轮盘（含侧翼与整合/压力方向）、依恋四象限（焦虑×回避，题已重做）、社交电量（消耗/充电/阈值，题已重做）、拖延三动机（情境选择题）、爱的语言环图、性格优势排名榜，以及 PSS-10、DASS-21、PANAS、WHO-5、SWLS、RSES、GSES、ISI、BSMAS、BSCS、TIPI、FFMQ-15、ERQ、Mini-SPIN 等公开量表的刻度盘分级页；趣味量表各有自己的物件：群聊截图、卡牌、奶茶杯、工牌、院徽、图鉴卡。结果页还带与上次对比、综合画像、收藏与时长筛选。v1.3.0 把主人的两套图接进来了：每份量表配一张狐狐插画做封面与结果页主视觉，25 张表情包用在群聊、头像、空状态与分享卡上。v1.4.0 加了氛围层（极光/色彩纱/网格扫描线）、HUD 角标与编号、入场错峰、条形生长与数字滚动，并全部支持 reduced-motion。数据只存本机 data/，不上传、不联网；所有量表仅供自我了解，不构成医学诊断。"
+short_description = "36 assessments, each with its own result UI: Big Five 30-facet radar, Enneagram wheel, RIASEC hexagon, attachment quadrant, social battery, procrastination clock, love-language donut, plus clinical dial gauges and fun object cards (chat mock, trading card, boba cup, ID badge, house crest, creature dex). All scored and stored locally."
+keywords = ["心理测评", "psychology", "人格", "personality", "大五", "big five", "分面", "facet", "IPIP", "VIA", "优势", "strengths", "16型", "九型", "enneagram", "霍兰德", "RIASEC", "六边形", "hexagon", "依恋", "attachment", "四象限", "quadrant", "社交电量", "battery", "拖延", "procrastination", "爱的语言", "love language", "环图", "donut", "PHQ-9", "GAD-7", "PSS-10", "DASS-21", "PANAS", "WHO-5", "SWLS", "RSES", "GSES", "ISI", "BSMAS", "BSCS", "TIPI", "FFMQ", "正念", "ERQ", "焦虑", "压力", "睡眠", "趣味测试", "quiz", "测评", "assessment", "画像", "profile", "UI", "测评结果页"]
+version = "1.4.0"
 type = "plugin"
 id = "neko_assessment"
 entry = "plugin.plugins.neko_assessment:AssessmentPlugin"

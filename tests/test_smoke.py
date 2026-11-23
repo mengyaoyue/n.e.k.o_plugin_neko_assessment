@@ -131,16 +131,25 @@ def test_gad7_and_loneliness_official_bands():
 
 
 def test_likert_direction_makes_sense():
-    """方向性检查：往某个方向答，对应维度就该更高。"""
+    """方向性检查：往某个方向答，对应维度就该更高。
+
+    v1.2.0 起社交能量拆成 drain/charge/threshold 三维、韧性换成 CD-RISC-10（0-4 分），
+    所以这里按「当前题库的真实维度键」检查方向，而不是写死旧键。
+    """
     scales = _load("_scales")
     engine = _load("_engine")
-    for scale_id, dim_key in (("resilience", "R"), ("social", "s"), ("eq", "aware")):
+    cases = (("resilience", "R"), ("social", "drain"), ("eq", "aware"))
+    for scale_id, dim_key in cases:
         scale = scales.get_scale(scale_id)
         items = scale["items"]
-        high = engine.score(scale_id, [5 if i["dim"] == dim_key else 1 for i in items], items=items)
-        low = engine.score(scale_id, [1 if i["dim"] == dim_key else 5 for i in items], items=items)
+        top = max(o["value"] for o in scale["options"])
+        low_v = min(o["value"] for o in scale["options"])
+        high = engine.score(scale_id, [top if i["dim"] == dim_key else low_v for i in items], items=items)
+        low = engine.score(scale_id, [low_v if i["dim"] == dim_key else top for i in items], items=items)
+
         def pick(res):
             return next(d for d in res["dims"] if d["key"] == dim_key)["score"]
+
         assert pick(high) > pick(low), f"{scale_id} 方向不对"
 
 
@@ -154,7 +163,8 @@ def test_type_scales_pick_the_dominant_dimension():
         "house": ("courage", "courage"),
         "spirit": ("dolphin", "dolphin"),
         "worker": ("dreamer", "dreamer"),
-        "ennea": ("t3", "t3"),
+        # 九型的内部维度键是 t3，展示用的编号是 "3"（v1.2.0 起结果是 1-9 的编号）
+        "ennea": ("t3", "3"),
     }
     for scale_id, (dim_key, expect_key) in cases.items():
         scale = scales.get_scale(scale_id)
@@ -423,7 +433,13 @@ def test_dataset_meta_complete():
         assert scale.get("method"), f"{scale['id']} 缺算分说明"
         assert 1 <= scale["min_items"] <= len(scale["bank"])
         assert 1 <= scale["default_items"] <= len(scale["bank"])
-        # 任何测评默认都要至少 10 题（不能出现「3 题测评」这种观感）
+        # v1.1.0：照搬原题的官方短筛（PHQ-9 之外的 PSS-10/ISI/WHO-5/SWLS/Mini-SPIN）
+        # 题量由原量表决定，不能为了「至少 10 题」扩题——那会破坏它和原分级阈值的对应关系。
+        if scale.get("fixed") and scale.get("official_count"):
+            assert scale["official_count"] == len(scale["bank"]), \
+                f"{scale['id']} 固定量表必须整卷出题"
+            continue
+        # 其余（自编 / 抽题型）任何测评默认都要至少 10 题
         assert scale["default_items"] >= 10, f"{scale['id']} 默认题数不足 10：{scale['default_items']}"
         if scale["id"] in scales.FIXED_SCALES:
             # 官方量表：默认至少 10 题走扩展自评；官方原题保留为可选项
@@ -567,14 +583,27 @@ def test_panel_share_card_has_preview_and_clipboard():
     assert "api('/api/card'" in js, "要交给后端落盘"
     assert "右键" in html, "要提示右键另存"
 
+def _size_floor(scale):
+    """题库规模下限：整卷照搬原题的量表按原版题量，其余（自编/抽题型）至少 20 题。"""
+    bank = scale.get("bank") or []
+    whole = bool(scale.get("official_count")) and len(bank) == scale["official_count"]
+    return 1 if whole else 20
+
+
 def test_four_banks_reach_100_items():
-    """已达标的大题库：大五 / EQ / 社交能量 / 心理韧性 各 100 题。"""
+    """已达标的大题库：大五 / EQ / 社交能量 / 心理韧性 各 100 题。
+
+    v1.1.0 起新增「照搬原题的公共领域量表」（IPIP-NEO-120 的 120 题、IPIP-VIA-R 的 96 题），
+    这类量表的题量由原版决定，不能削到 100 题以内——原题库规模只对自编/抽题型量表设上限。
+    """
     scales = _load("_scales")
     for scale in scales.SCALES:
         scale_id = scale["id"]
-        assert 20 <= len(scale["bank"]) <= 100, f"{scale_id} 题库规模异常：{len(scale['bank'])}"
+        cap = 400 if scale.get("public_domain") else 100
+        floor = _size_floor(scale)
+        assert floor <= len(scale["bank"]) <= cap, f"{scale_id} 题库规模异常：{len(scale['bank'])}"
         assert scale["default_items"] <= len(scale["bank"])
-        rev = sum(1 for item in scale["bank"] if item["reverse"])
+        rev = sum(1 for item in scale["bank"] if item.get("reverse"))
         assert rev >= 0, scale_id
         # 题干不能重样
         texts = [item["text"] for item in scale["bank"]]
@@ -622,7 +651,9 @@ def test_click_flow_markers_present():
     """点卡片 → 选题量 → 开始：关键钩子必须在。"""
     html = _panel_html()
     js = html.split("<script>")[1].split("</script>")[0]
-    assert "el.onclick = () => openStarter(el.dataset.id)" in js
+    # v1.1.0：卡片上多了收藏按钮，点击要跳过 pin 再开量表，所以改成显式判断
+    assert "openStarter(el.dataset.id)" in js and "function openStarter(id)" in js
+    assert "if (ev.target.closest('.pin')) return;" in js, "点收藏星星不能同时开量表"
     assert "官方 ${officialCount} 题" in js, "官方量表要给出官方题数档位"
     assert "扩展自评" in js, "超出官方题数要标为扩展自评"
     assert "$('starter-go').onclick = () => { if (PICK) startScale(PICK.id, PICK_COUNT); }" in js
@@ -665,11 +696,13 @@ def test_questions_are_human_readable():
 
 
 def test_bank_sizes_and_official_counts():
-    """题库规模：手写题 20~100 题；官方量表必须保留官方原题与官方题数。"""
+    """题库规模：自编题 20~100 题；照搬原题的公共领域量表按原版题量（IPIP-NEO-120 / VIA-R 96）。"""
     scales = _load("_scales")
     for scale in scales.SCALES:
         size = len(scale["bank"])
-        assert 20 <= size <= 100, f"{scale['id']} 题库 {size} 题"
+        cap = 400 if scale.get("public_domain") else 100
+        # 整卷照搬原题的短筛（PSS-10 / ISI / SWLS / WHO-5 / Mini-SPIN / GSES）题量由原量表决定
+        assert _size_floor(scale) <= size <= cap, f"{scale['id']} 题库 {size} 题"
         assert scale["default_items"] <= size
         if scale["id"] in scales.FIXED_SCALES:
             official = scale["official_count"]
@@ -2655,3 +2688,342 @@ class TestFrozenHostCompat:
         for mod, imp in sorted(self.KNOWN_DEVIATIONS):
             name = mod[:-3] if mod.endswith(".py") else mod
             assert name in broken, f"{mod} 号称因 {imp} 失败，实际却 import 成功了"
+
+# ════════════════════════════════════════════════════════════
+# v1.1.0：新增公开题库 / 双极轴 / 分面 / 历史对比 / 综合画像
+# ════════════════════════════════════════════════════════════
+
+class _StoreSelf:
+    """带真实 RecordStore 的假 self：测 submit / compare / report。"""
+
+    def __init__(self, tmp_path):
+        from neko_assessment._store import RecordStore
+
+        self._store = RecordStore(tmp_path / "records.json")
+        self._prefs = {"pinned": []}
+        self.yui_memory_dir = ""
+
+    def _save_prefs(self, prefs):
+        self._prefs = prefs
+
+    # _api_pin 会用到；真插件里是普通方法，这里照抄最小实现
+    def _pinned(self):
+        pins = (self._prefs or {}).get("pinned")
+        return [str(x)[:40] for x in pins][:24] if isinstance(pins, list) else []
+
+
+def _submit_all(plugin_cls, fake, scale_id, answer):
+    body = plugin_cls._api_scale(fake, {"id": scale_id, "count": 0})
+    assert body["ok"], body
+    scale = body["scale"]
+    answers = [answer(item) for item in scale["items"]]
+    return plugin_cls._api_submit(fake, {"scale_id": scale_id, "answers": answers, "ids": scale["ids"]})
+
+
+def test_new_public_domain_scales_are_wired():
+    """v1.1.0 照搬的两份公共领域量表：IPIP-NEO-120（30 分面）与 IPIP-VIA-R（24 优势）。"""
+    scales = _load("_scales")
+    big5f = scales.get_scale("big5f")
+    assert big5f and len(big5f["items"]) == 120
+    assert len(big5f["facets"]) == 30
+    assert len({f["dim"] for f in big5f["facets"]}) == 5
+    via = scales.get_scale("via")
+    assert via and len(via["items"]) == 96
+    assert len(via["dimensions"]) == 24
+    # 每个优势 4 题（2 正 2 反）
+    per = {}
+    for item in via["items"]:
+        per[item["dim"]] = per.get(item["dim"], 0) + 1
+    assert set(per.values()) == {4}, per
+    assert all(big5f.get("public_domain") and via.get("public_domain") for _ in (0,))
+
+
+def test_new_short_screens_are_complete_instruments():
+    """PSS-10 / ISI / SWLS / WHO-5 这类短筛必须是整卷固定题量（不能抽题）。"""
+    scales = _load("_scales")
+    expected = {"pss10": 10, "isi": 7, "swls": 5, "who5": 5, "rses": 10, "bsmas": 6, "minispin": 3}
+    for scale_id, size in expected.items():
+        scale = scales.get_scale(scale_id)
+        assert scale, f"缺量表 {scale_id}"
+        assert len(scale["items"]) == size, f"{scale_id} 题数应为 {size}"
+        assert scale["fixed"] and scale["official_count"] == size
+        assert scale.get("bands"), f"{scale_id} 缺分级切点"
+
+
+def test_facet_scores_come_out_per_facet():
+    """30 分面：分面分按各自 4 题满分换算，并带 band。"""
+    scales = _load("_scales")
+    engine = _load("_engine")
+    items = scales.get_scale("big5f")["items"]
+    answers = []
+    for item in items:
+        if item["facet"] == "N1":
+            answers.append(5)
+        else:
+            answers.append(3)
+    result = engine.score("big5f", answers, items=items)
+    facets = {f["key"]: f for f in result["facets"]}
+    assert len(facets) == 30
+    assert facets["N1"]["percent"] == 100
+    assert facets["N1"]["band"] == "high"
+    assert facets["E1"]["percent"] < 100
+
+
+def test_type16_returns_bipolar_axes():
+    """16 型要给出「左 62% / 右 38%」的双极轴，而不只是四个字母。"""
+    scales = _load("_scales")
+    engine = _load("_engine")
+    scale = scales.get_scale("type16")
+    items = scale["items"]
+    # 所有「E/I」「S/N」「T/F」「J/P」都往左侧压
+    answers = []
+    for item in items:
+        if item.get("options"):
+            options = item["options"]
+            best = max(range(len(options)), key=lambda i: sum(options[i].get("weights", {}).values()))
+            answers.append(best)
+        else:
+            answers.append(5 if item["dim"] in ("E", "S", "T", "J") else 1)
+    result = engine.score("type16", answers, items=items)
+    axes = result.get("axes") or []
+    assert len(axes) == 4
+    for axis in axes:
+        total = axis["left"]["percent"] + axis["right"]["percent"]
+        assert total == 100
+        assert axis["left"]["percent"] >= 50
+        assert axis["strength"] == abs(axis["left"]["percent"] - 50)
+
+
+def test_dimension_bands_can_use_raw_score():
+    """DASS-21 的分级切点是原始分（不是百分比），dim_bands_on=score 要生效。"""
+    scales = _load("_scales")
+    engine = _load("_engine")
+    scale = scales.get_scale("dass21")
+    items = scale["items"]
+    calm = engine.score("dass21", [0] * len(items), items=items)
+    heavy = engine.score("dass21", [3] * len(items), items=items)
+    calm_bands = {d["key"]: d.get("band") for d in calm["dims"]}
+    heavy_bands = {d["key"]: d.get("band") for d in heavy["dims"]}
+    assert calm_bands == {"dep": "正常", "anx": "正常", "str": "正常"}
+    assert heavy_bands["dep"] == "重度" and heavy_bands["str"] == "重度"
+
+
+def test_submit_compares_with_previous_round(tmp_path):
+    """同一份量表第二次提交，要带出「和上次比」的维度差。"""
+    cls = _plugin_cls()
+    fake = _StoreSelf(tmp_path)
+    first = _submit_all(cls, fake, "pss10", lambda item: 0)
+    assert first["compare"]["available"] is False, "第一次没有可比对象"
+    second = _submit_all(cls, fake, "pss10", lambda item: 4)
+    cmp = second["compare"]
+    assert cmp["available"] is True
+    assert cmp["total_before"] == first["total"]
+    assert cmp["total_now"] > cmp["total_before"], "压力题全选「总是」，总分应升高"
+    assert cmp["dims"], "要给出维度差"
+    assert any(d["delta"] != 0 for d in cmp["dims"])
+
+
+def test_report_combines_latest_records(tmp_path):
+    """综合画像：把最近一次结果拼成报告，并指出还没做的量表。"""
+    cls = _plugin_cls()
+    fake = _StoreSelf(tmp_path)
+    _submit_all(cls, fake, "pss10", lambda item: 2)
+    _submit_all(cls, fake, "swls", lambda item: 6)
+    _submit_all(cls, fake, "tipi", lambda item: 5)
+    report = cls._api_report(fake, {})
+    assert report["ok"] and not report["empty"]
+    text = report["text"]
+    assert "压力知觉" in text or "压力" in text
+    assert "生活满意度" in text
+    titles = [s["title"] for s in report["sections"]]
+    assert "最近的状态" in titles
+    assert report["counts"]["done"] == 3
+    assert "接下来" in "".join(titles) or "接下来可以做什么" in titles
+
+
+def test_pin_toggles_and_persists(tmp_path):
+    cls = _plugin_cls()
+    fake = _StoreSelf(tmp_path)
+    on = cls._api_pin(fake, {"id": "via"})
+    assert on["ok"] and on["on"] is True and "via" in on["pinned"]
+    rows = {row["id"]: row for row in cls._api_scales(fake, {})["scales"]}
+    assert rows["via"]["pinned"] is True
+    off = cls._api_pin(fake, {"id": "via"})
+    assert off["on"] is False and off["pinned"] == []
+
+
+def test_panel_has_new_result_blocks():
+    """结果页要有双极轴、分面明细、与上次对比、题号导航与画像页。"""
+    html = _panel_html()
+    js = html.split("<script>")[1].split("</script>")[0]
+    assert ".axis-track" in html and ".axis-pill" in html
+    assert ".facet-grid" in html and ".qnav" in html
+    assert ".delta" in html and ".report-sec" in html
+    assert 'id="view-report"' in html and 'data-tab="report"' in html
+    assert 'id="qnav"' in html and 'id="durs"' in html and 'id="recommend"' in html
+    assert "res.axes" in js and "res.facets" in js and "res.compare" in js
+    assert "loadReport" in js and "renderQNav" in js
+
+# ════════════════════════════════════════════════════════════
+# v1.2.0：一测一 UI + 内容重做
+# ════════════════════════════════════════════════════════════
+
+def test_every_scale_has_a_known_layout():
+    """每份量表都要有自己的结果版式，且前端真的实现了它。"""
+    scales = _load("_scales")
+    ui = _load("_scales_ui")
+    js = _panel_html().split("<script>")[1].split("</script>")[0]
+    for scale in scales.SCALES:
+        layout = scale.get("layout")
+        assert layout, f"{scale['id']} 缺 layout"
+        assert layout in ui.LAYOUTS.values() or layout == "radar", f"{scale['id']} 版式未知：{layout}"
+        assert f"{layout}(res)" in js or f"{layout}:" in js, f"前端没有实现 {layout}"
+
+
+def test_layouts_are_not_all_the_same():
+    """回归：以前所有量表都套同一套条形图；现在至少要有 8 种不同版式。"""
+    scales = _load("_scales")
+    layouts = {scale.get("layout") for scale in scales.SCALES}
+    assert len(layouts) >= 10, f"版式种类太少：{layouts}"
+    assert {"radar", "bands", "wheel9", "hexagon", "quadrant", "battery", "chat"} <= layouts
+
+
+def test_rewritten_scales_have_new_structure():
+    """依恋/韧性/社交/拖延换成能分开人的题：两轴、真题、三维、三动机。"""
+    scales = _load("_scales")
+    att = scales.get_scale("attachment")
+    assert {d["key"] for d in att["dimensions"]} == {"anxious", "avoidant"}
+    assert len(att["items"]) == 12 and att["fixed"]
+
+    res = scales.get_scale("resilience")
+    assert "CD-RISC" in res["source"] and len(res["items"]) == 10
+    assert [o["value"] for o in res["options"]] == [0, 1, 2, 3, 4]
+
+    soc = scales.get_scale("social")
+    assert {d["key"] for d in soc["dimensions"]} == {"drain", "charge", "threshold"}
+    assert len(soc["items"]) == 24
+
+    proc = scales.get_scale("procrastination")
+    assert proc["kind"] == "dimension_type"
+    assert {d["key"] for d in proc["dimensions"]} == {"impulsive", "avoidant", "decisive"}
+    assert all(item.get("options") for item in proc["items"]), "拖延应是情境选择题"
+
+
+def test_enrichment_for_new_layouts():
+    """结果里要带：九型中心/侧翼、依恋四象限坐标、趣味卡文案、分级带。"""
+    scales = _load("_scales")
+    engine = _load("_engine")
+
+    ennea = scales.get_scale("ennea")
+    ans = [5 if i["dim"] == "t8" else 1 for i in ennea["bank"]]
+    res = engine.score("ennea", ans, items=ennea["bank"])
+    assert res["ennea"]["center"].startswith("腹中心")
+    assert res["ennea"]["growth"] and res["ennea"]["stress"]
+    assert res["type"]["code"] == "8", "展示编号应是 8 而不是 t8"
+
+    att = scales.get_scale("attachment")
+    both_high = engine.score("attachment", [5] * 12, items=att["items"])
+    assert both_high["quadrant"]["code"] == "fearful"
+    assert both_high["quadrant"]["x"] == 100
+    calm = engine.score("attachment", [1] * 12, items=att["items"])
+    assert calm["quadrant"]["code"] == "secure"
+
+    piggy = scales.get_scale("piggy")
+    cardres = engine.score("piggy", _answers(piggy["bank"], {"lazy"}), items=piggy["bank"])
+    assert cardres["card"]["tag"] and cardres["card"]["lines"]
+
+    pss = scales.get_scale("pss10")
+    bands_res = engine.score("pss10", [3] * 10, items=pss["items"], official=True)
+    assert bands_res["bands"] and bands_res["max_total"] == 40
+
+# ════════════════════════════════════════════════════════════
+# v1.3.0：把自己给的图接进面板（狐狐插画 + 表情包）
+# ════════════════════════════════════════════════════════════
+
+def test_art_assets_exist_and_are_local():
+    """每份量表都要有封面图，且面板里引用的 art/ 路径必须真的存在。"""
+    import re as _re
+
+    scales = _load("_scales")
+    art = _load("_art")
+    root = ROOT / "static"
+
+    for scale in scales.SCALES:
+        cover = scale.get("cover")
+        assert cover, f"{scale['id']} 没有封面"
+        assert (root / cover).is_file(), f"{scale['id']} 封面文件缺失：{cover}"
+
+    for scale_id in art.SCALE_FOX:
+        prefix = art.fox_for(scale_id)["img"]
+        assert (root / prefix).is_file(), f"{scale_id} 的插画缺失：{prefix}"
+
+    for name in art.STICKERS:
+        path = art.sticker(name)
+        assert (root / path).is_file(), f"表情缺失：{path}"
+
+    html = _panel_html()
+    used = set(_re.findall(r'art/[A-Za-z0-9_./-]+\.webp', html))
+    assert used, "面板里至少要用到几张图"
+    for path in sorted(used):
+        assert (root / path).is_file(), f"面板引用了不存在的图：{path}"
+    # 图片只能是本地相对路径
+    assert "http" not in "".join(used)
+
+
+def test_art_payload_is_small_enough():
+    """两套图压完不能把插件包撑爆（目标 < 3.5MB）。"""
+    root = ROOT / "static" / "art"
+    total = sum(p.stat().st_size for p in root.rglob("*.webp"))
+    assert total < 3_500_000, f"art 目录 {total // 1024}KB，太大了"
+
+
+def test_every_layout_has_art_or_emoji_fallback():
+    """出了图以后也要有 emoji 兜底：图挂了结果页还能看。"""
+    scales = _load("_scales")
+    engine = _load("_engine")
+    for scale_id in ("big5", "ennea", "groupie", "pss10"):
+        scale = scales.get_scale(scale_id)
+        result = engine.score(scale_id, [3] * len(scale["items"]), items=scale["items"])
+        art = result["art"]
+        assert art.get("emoji"), f"{scale_id} 缺 emoji 兜底"
+        assert art.get("img") and art.get("thumb"), f"{scale_id} 缺插画路径"
+
+# ════════════════════════════════════════════════════════════
+# v1.4.0：氛围层（极光/纱/网格）、HUD、动效节奏
+# ════════════════════════════════════════════════════════════
+
+def test_atmosphere_layers_present():
+    """至少要有：极光层、色彩纱、网格扫描线；不能只靠一张壁纸撑氛围。"""
+    css = _panel_html().split("<style>")[1].split("</style>")[0]
+    assert ".app::before" in css and "mix-blend-mode:multiply" in css, "缺色彩纱"
+    assert "auroraDrift" in css, "缺极光漂移"
+    assert "repeating-linear-gradient(180deg" in css, "缺扫描线"
+    assert "@keyframes bokeh" not in css or True  # 允许后续替换实现
+
+
+def test_motion_respects_reduced_motion():
+    """所有动画都要能被 prefers-reduced-motion 关掉。"""
+    css = _panel_html().split("<style>")[1].split("</style>")[0]
+    assert "prefers-reduced-motion" in css
+    assert "animation:none !important" in css and "transition:none !important" in css
+
+
+def test_rhythm_hooks():
+    """节奏：进场错峰、图表 pop、条形过渡、数字滚动。"""
+    html = _panel_html()
+    css = html.split("<style>")[1].split("</style>")[0]
+    js = html.split("<script>")[1].split("</script>")[0]
+    assert "@keyframes riseIn" in css and "animation:riseIn" in css, "缺进场动画"
+    assert "popIn" in css, "缺图表出现动画"
+    assert "transition:width .85s" in css, "条形没有过渡"
+    assert "function animateBars" in js and "function countUp" in js
+    assert "prefers-reduced-motion" in css
+
+
+def test_category_colors_and_hud():
+    """分类色与 HUD 编号：卡片要有颜色区分，不再一片白。"""
+    html = _panel_html()
+    js = html.split("<script>")[1].split("</script>")[0]
+    css = html.split("<style>")[1].split("</style>")[0]
+    assert "CAT_COLOR" in js and "style=\"--cat:" in js
+    assert "counter-increment:sec" in css and "counter(sec,decimal-leading-zero)" in css

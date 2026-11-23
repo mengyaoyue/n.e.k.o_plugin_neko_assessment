@@ -48,6 +48,18 @@ class RecordStore:
             "type": result.get("type"),
             "code": result.get("code"),
             "dims": result.get("dims", []),
+            # 分面与双极轴：综合画像 / 趋势要用（只存百分比，不存逐题答案）
+            "facets": [
+                {"key": f.get("key"), "name": f.get("name"), "percent": f.get("percent"),
+                 "dim": f.get("dim")}
+                for f in (result.get("facets") or [])
+            ],
+            "axes": [
+                {"key": a.get("key"), "name": a.get("name"),
+                 "left": (a.get("left") or {}).get("percent"),
+                 "right": (a.get("right") or {}).get("percent")}
+                for a in (result.get("axes") or [])
+            ],
             "answers": list(answers or []),
         }
         rows.append(record)

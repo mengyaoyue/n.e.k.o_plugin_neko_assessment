@@ -11,7 +11,7 @@
 
 :root{
   --ink:#241f38; --ink2:#4d4670; --dim:#857da6;
-  --glass:rgba(255,255,255,.74); --line:rgba(255,255,255,.9); --edge:rgba(112,102,168,.16);
+  --glass:rgba(255,255,255,.92); --line:rgba(255,255,255,.96); --edge:rgba(112,102,168,.16);
   --accent:#6d5ce0; --accent-2:#9b8bf7; --ok:#2c9d72; --bad:#d24f6d; --warn:#b8811f;
   --shadow:0 10px 30px rgba(52,44,96,.12);
   --font-ui:'Quicksand',system-ui,'Microsoft YaHei','PingFang SC',sans-serif;
@@ -22,7 +22,7 @@
   --fs-in:calc(var(--fs) * .95); --fs-md:calc(var(--fs) * 1); --fs-lg:calc(var(--fs) * 1.15);
   --fs-xl:calc(var(--fs) * 1.5); --fs-h1:calc(var(--fs) * 1.6); --fs-q:calc(var(--fs) * 1.5);
   --bg-stack:
-    linear-gradient(180deg,rgba(255,255,255,.34) 0%,rgba(255,255,255,.6) 45%,rgba(253,251,255,.78) 100%),
+    linear-gradient(180deg,rgba(255,255,255,.4) 0%,rgba(255,255,255,.58) 42%,rgba(253,251,255,.78) 100%),
     url("bg.jpg") center top / cover no-repeat fixed,
     linear-gradient(160deg,#f0f2ff,#f9f4ff 55%,#eef7fb);
 }
@@ -31,14 +31,37 @@
 *::-webkit-scrollbar{width:9px;height:9px}
 *::-webkit-scrollbar-thumb{background:rgba(109,92,224,.28);border-radius:6px;border:2px solid transparent;background-clip:content-box}
 body{margin:0;color:var(--ink);font-family:var(--font-body);font-size:var(--fs);line-height:1.7;background:var(--bg-stack)}
-.app{max-width:1120px;margin:0 auto;padding:20px 18px 64px}
+.app{max-width:1120px;margin:0 auto;padding:20px 18px 64px;position:relative;z-index:1}
+/* 彩色纱：叠在壁纸上、内容下，压住壁纸的杂乱并给出色调 */
+.app::before{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;mix-blend-mode:multiply;
+  background:
+    radial-gradient(80% 60% at 20% 0%,rgba(120,86,215,.26),transparent 70%),
+    radial-gradient(70% 60% at 90% 20%,rgba(214,96,180,.2),transparent 72%),
+    linear-gradient(165deg,rgba(86,64,170,.16),rgba(20,120,150,.12) 58%,rgba(160,64,140,.14))}
+/* 内容区背后的两团柔光：只在卡片缝隙和页边露出来，制造「浮在光里」的感觉 */
+.app::after{
+  content:"";position:fixed;left:50%;top:8vh;width:min(1100px,96vw);height:70vh;z-index:-1;
+  transform:translateX(-50%);pointer-events:none;opacity:.55;
+  background:
+    radial-gradient(38% 46% at 22% 30%,rgba(167,139,250,.5),transparent 70%),
+    radial-gradient(34% 40% at 78% 62%,rgba(45,212,191,.35),transparent 72%),
+    radial-gradient(30% 36% at 62% 12%,rgba(240,171,252,.4),transparent 70%);
+  filter:blur(26px);
+  animation:appGlow 26s ease-in-out infinite alternate;
+}
+@keyframes appGlow{
+  from{transform:translateX(-50%) translateY(-8px) scale(1)}
+  to{transform:translateX(-50%) translateY(14px) scale(1.04)}
+}
 #trail-canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:90}
 #trail-canvas.off{display:none}
 
 /* 顶栏 */
 .topbar{display:flex;align-items:center;gap:13px;flex-wrap:wrap;margin-bottom:16px}
-.mark{width:48px;height:48px;border-radius:16px;flex:none;display:grid;place-items:center;
-  background:linear-gradient(160deg,#8fb8ff,#6d5ce0);color:#fff;box-shadow:0 8px 22px rgba(109,92,224,.3)}
+/* 顶栏：换成狐狐头像（原来的线框图标太素） */
+.mark{width:48px;height:48px;border-radius:16px;flex:none;overflow:hidden;
+  background:linear-gradient(160deg,#8fb8ff,#6d5ce0);box-shadow:0 8px 22px rgba(109,92,224,.3)}
+.mark img{width:100%;height:100%;object-fit:cover;object-position:50% 18%;display:block}
 .mark svg{width:26px;height:26px;stroke:#fff;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 h1{font-family:var(--font-ui);font-size:var(--fs-h1);margin:0;letter-spacing:.2px}
 .sub{color:var(--ink2);font-size:var(--fs-sm);margin-top:2px}
@@ -59,9 +82,28 @@ h1{font-family:var(--font-ui);font-size:var(--fs-h1);margin:0;letter-spacing:.2p
 .tab svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .tab:hover{background:rgba(255,255,255,.62);color:var(--ink)}
 .tab.on{background:linear-gradient(180deg,#8d7ff3,#6d5ce0);color:#fff;box-shadow:0 8px 18px rgba(109,92,224,.32)}
-.content{min-width:0}
+.content{min-width:0;position:relative;z-index:0}
+/* 内容区：一整块磨砂玻璃面板，卡片浮在上面（设备感/HUD） */
+@media (min-width:900px){
+  .content::before{
+    content:"";position:absolute;inset:-12px -14px -6px;border-radius:28px;z-index:-1;
+    background:linear-gradient(180deg,rgba(255,255,255,.5),rgba(243,238,255,.4));
+    border:1px solid rgba(255,255,255,.6);
+    backdrop-filter:blur(20px) saturate(1.15);-webkit-backdrop-filter:blur(20px) saturate(1.15);
+    box-shadow:0 34px 70px -34px rgba(52,44,96,.45),inset 0 1px 0 rgba(255,255,255,.9);
+  }
+  .content::after{
+    content:"";position:absolute;inset:-6px -8px 0;border-radius:24px;pointer-events:none;z-index:-1;
+    background:
+      linear-gradient(var(--hud-line),var(--hud-line)) left top/18px 1px no-repeat,
+      linear-gradient(var(--hud-line),var(--hud-line)) left top/1px 18px no-repeat,
+      linear-gradient(var(--hud-line),var(--hud-line)) right bottom/18px 1px no-repeat,
+      linear-gradient(var(--hud-line),var(--hud-line)) right bottom/1px 18px no-repeat;
+    opacity:.8;
+  }
+}
 
-.card{background:var(--glass);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+.card{background:linear-gradient(180deg,rgba(255,255,255,.94),rgba(250,247,255,.9));backdrop-filter:blur(16px) saturate(1.05);-webkit-backdrop-filter:blur(16px) saturate(1.05);
   border:1px solid var(--line);border-radius:20px;padding:18px 20px;margin-bottom:14px;box-shadow:var(--shadow)}
 .card h2{display:flex;align-items:center;gap:9px;font-family:var(--font-ui);font-size:var(--fs-lg);
   margin:0 0 12px;color:#3a3260;font-weight:600}
@@ -179,6 +221,10 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 .cchip small{display:block;font-size:var(--fs-2xs);opacity:.85;font-weight:400}
 
 /* 结果页的结构：卡片框 + 分隔线（原先一堆裸文本看着散） */
+/* 通用进度条：framebox / 自定义版式里直接用 class="track" 也能显示 */
+.track{position:relative;height:8px;border-radius:99px;background:rgba(109,92,224,.12);overflow:hidden}
+.track i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#8d7ff3,#6d5ce0)}
+
 .framebox{background:rgba(255,255,255,.66);border:1px solid var(--line);border-radius:14px;
   padding:12px 15px;margin-bottom:9px;box-shadow:0 2px 10px rgba(80,70,160,.05)}
 .framebox .fb-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:7px}
@@ -200,6 +246,57 @@ ul.tips{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm
 .hero-art::after{content:"";position:absolute;width:240px;height:240px;border-radius:50%;top:-60px;right:-50px;
   background:radial-gradient(rgba(255,255,255,.55),rgba(255,255,255,0) 70%)}
 #hero-emoji{position:relative;font-size:62px;line-height:1;filter:drop-shadow(0 8px 12px rgba(50,35,110,.3))}
+
+/* v1.3.0：结果页主视觉换成插画（左图右文），emoji 只做兜底 */
+.hero{display:flex;gap:18px;align-items:center;text-align:left;padding:6px 0 2px}
+.hero .hero-art{width:132px;height:164px;flex:none;margin:0;border-radius:20px;
+  box-shadow:0 12px 26px -12px rgba(80,70,160,.5);border:2px solid rgba(255,255,255,.75)}
+.hero .hero-art::before,.hero .hero-art::after{content:"";position:absolute;pointer-events:none;display:block}
+/* 取景框角标：四角 14px 的细线，科幻感靠这个 */
+.hero .hero-art::before{
+  inset:7px;border-radius:12px;
+  background:
+    linear-gradient(rgba(255,255,255,.85),rgba(255,255,255,.85)) left top/14px 1px no-repeat,
+    linear-gradient(rgba(255,255,255,.85),rgba(255,255,255,.85)) left top/1px 14px no-repeat,
+    linear-gradient(rgba(255,255,255,.85),rgba(255,255,255,.85)) right bottom/14px 1px no-repeat,
+    linear-gradient(rgba(255,255,255,.85),rgba(255,255,255,.85)) right bottom/1px 14px no-repeat;
+  opacity:.9;z-index:2;
+}
+.hero .hero-art::after{
+  inset:0;border-radius:inherit;
+  background:linear-gradient(115deg,transparent 40%,rgba(255,255,255,.65) 50%,transparent 60%);
+  transform:translateX(-130%);animation:heroSheen 5.5s ease-in-out infinite;
+}
+.hero .hero-art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  object-position:50% 15%;display:none}
+.hero .hero-art.hasimg img{display:block}
+.hero .hero-art.hasimg #hero-emoji{display:none}
+.hero #hero-emoji{position:absolute;inset:0;display:grid;place-items:center;font-size:50px}
+.hero .hero-body{min-width:0;flex:1}
+.hero .code{font-size:var(--fs-lg);text-align:left}
+.hero .nm{text-align:left;margin:2px 0 6px}
+.hero .sum{text-align:left;max-width:none;margin:0;font-size:var(--fs-in)}
+@media (max-width:640px){
+  .hero{gap:12px}
+  .hero .hero-art{width:96px;height:122px;border-radius:16px}
+  .hero .nm{font-size:var(--fs-lg)}
+}
+
+/* 量表卡 / 今日推荐：封面小图 */
+.sc .cov{width:42px;height:42px;flex:none;border-radius:13px;object-fit:cover;object-position:50% 15%;
+  border:1px solid rgba(255,255,255,.85);box-shadow:0 4px 10px rgba(80,70,160,.16)}
+.sc .top{align-items:center}
+.pick .emoji{overflow:hidden;padding:0}
+.pick .emoji img{width:100%;height:100%;object-fit:cover;object-position:50% 15%;display:block}
+
+/* 表情包（聊天头像 / 空状态 / 报错） */
+.stk{width:64px;height:auto;display:block;margin:0 auto 8px;filter:drop-shadow(0 6px 10px rgba(80,70,160,.16))}
+.chatmock .msg{display:flex;align-items:flex-start;gap:8px}
+.chatmock .ava{width:30px;height:30px;flex:none;border-radius:50%;object-fit:cover;object-position:50% 15%;
+  border:1px solid rgba(255,255,255,.9);background:#fff}
+.chatmock .msg.me .ava{order:2}
+.chatmock .msg .txt{min-width:0}
+.chatmock .msg.me{justify-content:flex-end}
 
 /* 单维度：双向刻度（社恐 ←→ 社牛 那种） */
 .gauge{margin:6px 0 12px}
@@ -467,11 +564,462 @@ details.cm-paste textarea:focus{border-color:var(--accent);
 .cml-raw{margin-top:5px;font-size:var(--fs-sm);color:var(--ink2);line-height:1.7;white-space:pre-wrap}
 @media (max-width:640px){.cm-pair{grid-template-columns:1fr}}
 
+/* ── 双极轴：16personalities 那种「左 62% / 右 38%」 ────────── */
+.axis{margin:0 0 13px}
+.axis-top{display:flex;align-items:baseline;gap:10px;font-size:var(--fs-sm);color:var(--ink2);margin-bottom:5px}
+.axis-top .side{flex:1;display:flex;align-items:baseline;gap:7px}
+.axis-top .side.right{justify-content:flex-end;text-align:right}
+.axis-top .pc{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--dim)}
+.axis-top .side.win{color:#3a3260;font-weight:600}
+.axis-top .side.win .pc{color:var(--accent)}
+/* 从中心向两侧生长：60/40 才看得出「偏向哪边」，
+   从左往右填会被读成 0-100 单极条，把 51% 看成「刚过半」——心理中点是 50%。 */
+.axis-track{position:relative;height:10px;border-radius:99px;background:rgba(109,92,224,.11);overflow:hidden}
+.axis-track i{position:absolute;top:0;bottom:0}
+.axis-track i.l{right:50%;border-radius:99px 0 0 99px;background:linear-gradient(270deg,#8d7ff3,#6d5ce0)}
+.axis-track i.r{left:50%;border-radius:0 99px 99px 0;background:linear-gradient(90deg,#8d7ff3,#6d5ce0)}
+.axis-track i.l.mute,.axis-track i.r.mute{background:rgba(109,92,224,.2)}
+.axis-track b.mid{position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:rgba(58,50,96,.22)}
+.axis-pill{display:inline-block;margin-left:6px;padding:0 7px;border-radius:999px;font-size:var(--fs-2xs);
+  background:rgba(109,92,224,.12);color:#5b4fc4}
+.axis-note{color:var(--dim);font-size:var(--fs-2xs);margin-top:4px}
+
+/* ── 分面明细（大五 30 面）──────────────────────────────── */
+.facet-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-top:4px}
+@media (max-width:640px){.facet-grid{grid-template-columns:1fr}}
+.frow{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm)}
+.frow .fn{width:88px;flex:none;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow .ft{flex:1;height:7px;border-radius:99px;background:rgba(109,92,224,.12);overflow:hidden}
+.frow .ft i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#8d7ff3,#6d5ce0)}
+.frow .fp{width:38px;flex:none;text-align:right;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--dim)}
+.frow.hot .fn{color:#3a3260;font-weight:600}
+.fgrp{margin-top:10px}
+.fgrp>.cap{font-family:var(--font-ui);font-size:var(--fs-sm);color:#5b4fc4;margin-bottom:4px}
+
+/* ── 与上次对比 ─────────────────────────────────────────── */
+.deltas{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px}
+.delta{display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.72);
+  border:1px solid var(--edge);border-radius:999px;padding:3px 10px;font-size:var(--fs-xs);color:var(--ink2)}
+.delta b{font-family:var(--font-mono);font-weight:600}
+.delta.up b{color:var(--ok)}
+.delta.down b{color:var(--bad)}
+.delta.flat b{color:var(--dim)}
+
+/* ── 题号导航 ───────────────────────────────────────────── */
+.qnav{display:flex;flex-wrap:wrap;gap:5px;margin:10px 0 2px;max-height:96px;overflow:auto}
+.qnav button{width:26px;height:26px;min-width:26px;padding:0;border-radius:8px;font-family:var(--font-mono);
+  font-size:var(--fs-2xs);background:rgba(255,255,255,.72);color:var(--dim);border:1px solid var(--edge);box-shadow:none}
+.qnav button:hover{color:var(--accent);border-color:var(--accent-2);transform:none}
+.qnav button.done{background:rgba(109,92,224,.16);color:#5b4fc4;border-color:rgba(109,92,224,.28)}
+.qnav button.cur{background:linear-gradient(180deg,#8d7ff3,#6d5ce0);color:#fff;border-color:transparent}
+
+/* ── 首页：今日推荐 / 收藏 ───────────────────────────────── */
+.pick{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.pick .emoji{width:56px;height:56px;flex:none;border-radius:18px;display:grid;place-items:center;font-size:28px;
+  background:linear-gradient(160deg,#8d7ff3,#5ec8f0);box-shadow:0 8px 20px rgba(109,92,224,.28)}
+.pick .body{flex:1;min-width:200px}
+.pick .body b{font-family:var(--font-ui);font-size:var(--fs-md);color:#3a3260}
+.sc .pin{position:absolute;right:10px;top:8px;background:none;border:0;box-shadow:none;padding:2px 4px;
+  font-size:14px;line-height:1;color:#c9c3dd;cursor:pointer}
+.sc .pin.on{color:#f0b155}
+.sc .pin:hover{color:#f0b155;transform:none;filter:none}
+.sc.pinned{border-color:rgba(240,177,85,.55);box-shadow:0 8px 22px rgba(240,177,85,.14)}
+.sc .tag{font-size:var(--fs-2xs);color:#6a6298;background:rgba(109,92,224,.09);border-radius:999px;padding:1px 8px}
+.sc .tag.cat{color:#fff;background:var(--cat,#8d7ff3);border:0}
+.sc .tag.pub{color:#1f6b4f;background:rgba(61,189,139,.14)}
+
+/* ── 一测一 UI（v1.2.0）：每个版式一套自己的视觉语言 ─────────── */
+:root{
+  --gold:#d9a441; --gold-lt:#f3d08a; --cream:#f6e3b4; --mint:#7fbfa8;
+  --coral:#e2795f; --lav:#c9b6e4; --deep:#3b2f4a;
+}
+.hintline{color:var(--dim);font-size:var(--fs-xs);margin:2px 0 10px}
+.laywrap{margin:6px 0 14px;display:flex;justify-content:center}
+.laywrap canvas{max-width:100%}
+
+/* ① 刻度盘（筛查量表） */
+.bandswrap{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;align-items:center}
+@media (max-width:640px){.bandswrap{grid-template-columns:1fr}}
+.bandlist{display:flex;flex-direction:column;gap:5px}
+.bandrow{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);color:var(--ink2);
+  padding:5px 10px;border-radius:10px;border:1px solid transparent}
+.bandrow i{width:9px;height:9px;border-radius:3px;flex:none;background:rgba(109,92,224,.28)}
+.bandrow.on{background:rgba(109,92,224,.1);border-color:rgba(109,92,224,.3);color:#3a3260;font-weight:600}
+.bandrow.on i{background:linear-gradient(180deg,#8d7ff3,#6d5ce0)}
+.bandrow .rg{margin-left:auto;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--dim)}
+
+/* ② 双表盘（两条独立线） */
+.duowrap{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.duowrap .dial{text-align:center}
+.duowrap canvas{max-width:100%}
+
+/* ③ 电量条（社交） */
+.batterybox{background:rgba(255,255,255,.6);border:1px solid var(--line);border-radius:18px;padding:14px 16px}
+.batt{position:relative;height:74px;border-radius:12px;border:3px solid rgba(59,47,74,.35);padding:5px;
+  display:flex;gap:4px;background:rgba(255,255,255,.5)}
+.batt::after{content:"";position:absolute;right:-11px;top:50%;transform:translateY(-50%);width:8px;height:26px;
+  border-radius:0 6px 6px 0;background:rgba(59,47,74,.35)}
+.batt .cell{flex:1;border-radius:7px;background:rgba(109,92,224,.13)}
+.batt .cell.on{background:linear-gradient(180deg,#8d7ff3,#6d5ce0)}
+.batt .cell.warn{background:linear-gradient(180deg,#f0b155,#e08f3f)}
+.batt .cell.low{background:linear-gradient(180deg,#e2795f,#c75a44)}
+.battlabel{display:flex;justify-content:space-between;margin-top:8px;font-size:var(--fs-sm);color:var(--ink2)}
+.battlabel b{font-family:var(--font-mono);color:#3a3260}
+
+/* ④ 排名榜（优势/价值观） */
+.ranklist{display:flex;flex-direction:column;gap:7px}
+.rankrow{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.62);
+  border:1px solid var(--line);border-radius:13px;padding:9px 12px}
+.rankrow .no{width:26px;flex:none;text-align:center;font-family:var(--font-mono);color:var(--dim);font-size:var(--fs-sm)}
+.rankrow.gold{border-color:rgba(217,164,65,.55);background:linear-gradient(90deg,rgba(246,227,180,.6),rgba(255,255,255,.7))}
+.rankrow.silver{border-color:rgba(160,166,186,.5)}
+.rankrow .nm{width:104px;flex:none;font-family:var(--font-ui);color:#3a3260}
+.rankrow .track{flex:1;height:9px;border-radius:99px;background:rgba(109,92,224,.12);overflow:hidden}
+.rankrow .track i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#8d7ff3,#6d5ce0)}
+.rankrow.gold .track i{background:linear-gradient(90deg,#f3d08a,#d9a441)}
+.rankrow .pc{width:42px;flex:none;text-align:right;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--dim)}
+
+/* ④ Quadrant-4 能力卡（EQ 四能力） */
+.quad4{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:640px){.quad4{grid-template-columns:1fr}}
+.q4card{background:rgba(255,255,255,.66);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.q4h{font-family:var(--font-ui);color:#3a3260;font-size:var(--fs-md)}
+.q4v{font-family:var(--font-mono);color:var(--accent);font-size:calc(var(--fs) * 1.3);margin:2px 0 4px}
+.q4t{color:var(--dim);font-size:var(--fs-xs);line-height:1.6}
+
+/* ⑤ 故事卡（娱乐测验）：品牌条 → 光晕 → 稀有度 → 标题 → tagline → 三条 → 证明 → 按钮 */
+.story{max-width:420px;margin:0 auto;background:linear-gradient(180deg,#fffdf9,#fbf6ff 60%,#f7f2ff);
+  border:1px solid var(--line);border-radius:22px;padding:18px 20px 20px;
+  box-shadow:0 1px 2px rgba(59,47,74,.06),0 16px 36px -14px rgba(93,63,140,.28);position:relative;overflow:hidden}
+.story .brand{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#9b8bb4;text-align:center}
+.story .glow{height:150px;display:grid;place-items:center;position:relative;margin:4px 0 2px}
+.story .glow::before{content:"";position:absolute;width:200px;height:200px;border-radius:50%;
+  background:radial-gradient(circle,rgba(201,182,228,.55),rgba(201,182,228,0) 68%)}
+.story .glow .big{font-size:88px;line-height:1;filter:drop-shadow(0 10px 16px rgba(93,63,140,.25));position:relative}
+.story .glow .ghost{position:absolute;font-size:88px;opacity:.16;filter:blur(6px);transform:translate(12px,10px)}
+.story .rare{align-self:center;display:inline-block;font-size:var(--fs-2xs);padding:3px 12px;border-radius:999px;
+  background:var(--cream);color:#7a5a18;margin-bottom:6px}
+.story .kicker{text-align:center;font-size:11px;letter-spacing:.2em;color:#9b8bb4;text-transform:uppercase}
+.story h3{margin:2px 0 6px;text-align:center;font-family:var(--font-ui);font-size:calc(var(--fs) * 1.6);color:var(--deep)}
+.story .tag{text-align:center;color:var(--ink2);font-size:var(--fs-md);line-height:1.7;margin-bottom:12px}
+.story ul{margin:0 0 12px;padding-left:2px;list-style:none;display:flex;flex-direction:column;gap:8px}
+.story ul li{display:flex;gap:8px;font-size:var(--fs-sm);color:var(--ink2);line-height:1.65}
+.story ul li::before{content:"·";color:var(--accent);font-weight:700}
+.story .pit{background:rgba(226,121,95,.1);border-left:3px solid var(--coral);border-radius:0 10px 10px 0;
+  padding:8px 11px;font-size:var(--fs-sm);color:#8a4433}
+.story .proof{text-align:center;font-size:var(--fs-2xs);color:var(--dim);margin-top:10px}
+.story .acts{display:flex;gap:8px;margin-top:12px}
+.story .acts button{flex:1}
+.story .match{margin-top:10px;text-align:center;font-size:var(--fs-sm);color:var(--ink2)}
+.story .match b{color:var(--accent)}
+
+/* ⑥ 收藏卡（TCG 比例 0.718 + 金边/斜光；全息只给主卡） */
+.tcg{position:relative;aspect-ratio:.718;width:min(320px,84vw);border-radius:4.55%/3.5%;
+  background:linear-gradient(160deg,#fffdf8,#f6ecff 55%,#eef7ff);border:2px solid var(--gold-lt);
+  box-shadow:0 0 0 1px rgba(217,164,65,.5),0 18px 40px -16px rgba(93,63,140,.45);overflow:hidden;
+  display:flex;flex-direction:column;padding:4.5%}
+.tcg::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.55;
+  background:linear-gradient(112deg,transparent 0 42%,rgba(255,255,255,.85) 47%,transparent 52%);
+  transform:translateX(-30%)}
+.tcg.epic::after{background:conic-gradient(from 210deg,hsl(2,100%,73%),hsl(53,100%,69%),hsl(93,100%,69%),
+  hsl(176,100%,76%),hsl(228,100%,74%),hsl(283,100%,73%),hsl(2,100%,73%));opacity:.22;transform:none;
+  mix-blend-mode:color-dodge}
+.tcg .top{display:flex;justify-content:space-between;align-items:center;font-size:10px;letter-spacing:.12em;
+  color:#7a6c8c;text-transform:uppercase}
+.tcg .art{flex:1;display:grid;place-items:center;position:relative}
+.tcg .art .big{font-size:64px;filter:drop-shadow(0 8px 12px rgba(93,63,140,.22))}
+.tcg .art .ring{position:absolute;width:58%;aspect-ratio:1;border-radius:50%;border:1px dashed rgba(139,107,177,.4)}
+.tcg h4{margin:0;text-align:center;font-family:var(--font-ui);font-size:calc(var(--fs) * 1.25);color:var(--deep)}
+.tcg .sub{text-align:center;font-size:10px;font-style:italic;color:#8a7ba3;margin-bottom:4px}
+.tcg .stats{display:flex;flex-direction:column;gap:4px;font-size:10px;color:#6a5c80}
+.tcg .stats .s{display:flex;align-items:center;gap:6px}
+.tcg .stats .s span{width:52px;flex:none}
+.tcg .stats .s i{flex:1;height:6px;border-radius:99px;background:rgba(139,107,177,.16);overflow:hidden;display:block}
+.tcg .stats .s i b{display:block;height:100%;background:linear-gradient(90deg,#c9b6e4,#8b6bb1)}
+.stamp{position:absolute;right:10px;bottom:8px;width:62px;height:62px;border-radius:50%;
+  border:2px solid rgba(217,164,65,.75);display:grid;place-items:center;transform:rotate(-8deg);
+  mix-blend-mode:multiply;color:rgba(217,164,65,.9);font-size:8px;letter-spacing:.18em;text-align:center;
+  line-height:1.25;background:rgba(255,255,255,.35)}
+.stamp::before{content:"";position:absolute;inset:4px;border:1px dashed rgba(217,164,65,.6);border-radius:50%}
+
+/* ⑦ 奶茶杯 */
+.cupwrap{display:grid;place-items:center;padding:6px 0 2px}
+.cup{position:relative;width:132px;height:212px}
+.cup .body{position:absolute;inset:0;clip-path:polygon(6% 0,94% 0,84% 100%,16% 100%);
+  background:linear-gradient(180deg,#fff9f0,#f6ecff);border-radius:0 0 18px 18px;overflow:hidden}
+.cup .liquid{position:absolute;left:0;right:0;bottom:0;height:38%;background:linear-gradient(180deg,#e8d4b8,#c9a67f)}
+.cup .milk{position:absolute;left:0;right:0;bottom:38%;height:24%;background:rgba(255,248,235,.9)}
+.cup .pearls{position:absolute;left:0;right:0;bottom:0;height:22%;
+  background-image:radial-gradient(circle at 6px 6px,rgba(60,40,30,.75) 3px,transparent 3.5px);
+  background-size:18px 18px}
+.cup .gloss{position:absolute;inset:0;background:linear-gradient(103deg,transparent 0 12%,rgba(255,255,255,.5) 12% 20%,transparent 20% 86%,rgba(255,255,255,.35) 86% 92%,transparent 92%)}
+.cup .lid{position:absolute;top:-10px;left:-3%;width:106%;height:16px;border-radius:8px 8px 5px 5px;
+  background:linear-gradient(180deg,#f7f1ff,#dcd0ef);border:1px solid rgba(139,107,177,.3)}
+.cup .straw{position:absolute;top:-46px;left:52%;width:9px;height:76px;border-radius:5px;transform:rotate(11deg);
+  background:repeating-linear-gradient(135deg,#c9b6e4 0 6px,#fbf6ff 6px 12px)}
+.cup .tag{position:absolute;left:50%;top:78px;transform:translateX(-50%) rotate(-3deg);
+  background:rgba(255,255,255,.9);border:1px solid rgba(139,107,177,.35);border-radius:8px;padding:3px 9px;
+  font-size:var(--fs-2xs);color:#5b4fc4;white-space:nowrap}
+.cup .cupstamp{position:absolute;right:-26px;bottom:6px;width:74px;height:74px;border-radius:50%;
+  object-fit:cover;object-position:50% 15%;border:3px solid #fff;transform:rotate(6deg);
+  box-shadow:0 8px 16px rgba(93,63,140,.28)}
+
+/* ⑧ 工牌 */
+.idcard{position:relative;width:min(270px,86vw);background:linear-gradient(180deg,#fffdfa,#f7f2ff);
+  border-radius:16px;padding:16px 16px 14px;transform:rotate(-2deg);
+  box-shadow:0 18px 34px -16px rgba(93,63,140,.4),0 0 0 1px rgba(139,107,177,.18)}
+.idcard .hole{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:34px;height:14px;
+  border-radius:999px;background:rgba(59,47,74,.12);box-shadow:inset 0 0 0 3px rgba(255,255,255,.8)}
+.idcard .avatar{width:96px;height:120px;margin:16px auto 8px;border-radius:10px;display:grid;place-items:center;
+  font-size:44px;background:linear-gradient(160deg,#dccbf2,#b9a2dc);box-shadow:inset 0 0 0 2px rgba(255,255,255,.6)}
+.idcard .nm{text-align:center;font-family:var(--font-ui);font-size:var(--fs-lg);color:var(--deep)}
+.idcard .role{text-align:center;font-size:var(--fs-sm);color:#6a5c80;margin-bottom:8px}
+.idcard .meta{display:flex;justify-content:space-between;font-size:var(--fs-2xs);color:#8a7ba3;margin:6px 0}
+.idcard .barcode{height:36px;border-radius:4px;
+  background:repeating-linear-gradient(90deg,#2a2233 0 2px,transparent 2px 3px,#2a2233 3px 5px,transparent 5px 9px,#2a2233 9px 12px,transparent 12px 14px)}
+.idcard .code{text-align:center;font-family:var(--font-mono);font-size:10px;letter-spacing:.28em;color:#6a5c80;margin-top:4px}
+
+/* ⑨ 群聊截图 */
+.chatmock{width:min(340px,92vw);background:#f3eef9;border-radius:16px;overflow:hidden;
+  box-shadow:0 16px 32px -18px rgba(93,63,140,.4);border:1px solid rgba(139,107,177,.18)}
+.chatmock .bar{height:42px;display:flex;align-items:center;justify-content:center;font-size:var(--fs-sm);
+  color:#4d4260;background:#ebe3f5;border-bottom:1px solid rgba(139,107,177,.16)}
+.chatmock .body{padding:12px;display:flex;flex-direction:column;gap:9px}
+.chatmock .t{text-align:center;font-size:10px;color:#948aa6}
+.chatmock .msg{max-width:78%;padding:8px 12px;font-size:var(--fs-sm);line-height:1.6;position:relative;
+  border-radius:4px 16px 16px 16px;background:#fff;color:#3b2f4a}
+.chatmock .msg.me{align-self:flex-end;border-radius:16px 4px 16px 16px;
+  background:linear-gradient(180deg,#9b7fd1,#8b6bb1);color:#fff}
+.chatmock .pat{align-self:center;font-size:var(--fs-2xs);color:#6a5c80;background:rgba(59,47,74,.06);
+  padding:4px 12px;border-radius:999px}
+
+/* ⑩ 院徽 */
+.crestwrap{display:grid;place-items:center;padding:4px 0}
+.crest{position:relative;width:180px;height:208px;filter:drop-shadow(0 0 0 #d9a441) drop-shadow(0 0 0 #d9a441)
+  drop-shadow(0 10px 16px rgba(93,63,140,.28))}
+.crest .shield{position:absolute;inset:0;clip-path:polygon(0 0,100% 0,100% 58%,50% 100%,0 58%);
+  background:linear-gradient(180deg,#8b6bb1 0 50%,#f6e3b4 50% 100%);display:grid;place-items:center}
+.crest .em{font-size:46px;filter:drop-shadow(0 4px 6px rgba(0,0,0,.2))}
+.crest .band{position:absolute;left:-6%;bottom:16%;width:112%;height:24px;
+  clip-path:polygon(0 0,100% 0,100% 100%,0 100%,6% 50%);
+  background:linear-gradient(180deg,#f3d08a,#d9a441);display:grid;place-items:center;
+  font-size:9px;letter-spacing:.18em;color:#5a3f12;font-family:var(--font-mono)}
+.crest .ring{position:absolute;inset:12% 14% 30%;border:1px solid rgba(255,255,255,.55);border-radius:50%}
+
+/* ⑪ 图鉴卡 */
+.dex{position:relative;aspect-ratio:.75;width:min(280px,84vw);border-radius:18px;padding:4%;
+  background:linear-gradient(180deg,#fffdf7,#f3f7ff);border:1px solid rgba(139,107,177,.25);
+  box-shadow:0 16px 32px -18px rgba(93,63,140,.4);display:flex;flex-direction:column}
+.dex .head{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10px;color:#8a7ba3}
+.dex .pic{flex:1;display:grid;place-items:center;position:relative}
+.dex .pic .big{font-size:80px;filter:drop-shadow(0 8px 12px rgba(93,63,140,.22))}
+.dex .pic .ring{position:absolute;width:132px;height:132px;border-radius:50%;
+  border:1px dashed rgba(139,107,177,.35);background:rgba(255,255,255,.4)}
+.dex .pic .shadow{position:absolute;bottom:12%;width:82px;height:12px;border-radius:50%;
+  background:radial-gradient(ellipse,rgba(93,63,140,.28),transparent 70%)}
+.dex .nm{text-align:center;font-family:var(--font-ui);font-size:calc(var(--fs) * 1.2);color:var(--deep)}
+.dex .lat{text-align:center;font-size:10px;font-style:italic;color:#8a7ba3;margin-bottom:4px}
+.dex .attrs{display:flex;flex-direction:column;gap:4px;font-size:10px;color:#6a5c80}
+.dex .attrs .a{display:flex;align-items:center;gap:6px}
+.dex .attrs .a span{width:46px;flex:none}
+.dex .attrs .a i{flex:1;height:7px;border-radius:99px;background:rgba(139,107,177,.16);overflow:hidden;display:block}
+.dex .attrs .a i b{display:block;height:100%;background:linear-gradient(90deg,#7fbfa8,#8b6bb1)}
+.dex .attrs .a em{width:30px;text-align:right;font-style:normal;font-family:var(--font-mono)}
+/* 结果页 hero：背后一层柔光，图不至于「贴」在白底上 */
+.hero::before{content:"";position:absolute;inset:-26px -18px;border-radius:30px;z-index:-1;
+  background:radial-gradient(62% 110% at 10% 50%,var(--halo,rgba(167,139,250,.35)),transparent 72%);
+  filter:blur(20px);opacity:.9}
+/* 结果页主视觉：插画 + 光晕 + 轻微倾角（悬浮感） */
+.hero .hero-art{
+  background:linear-gradient(135deg,var(--art-a,#8d7ff3),var(--art-b,#5ec8f0));
+  box-shadow:0 20px 44px -20px rgba(80,70,160,.75),0 0 0 1px rgba(255,255,255,.65),
+    0 0 48px -12px var(--art-a,#8d7ff3);
+  transform:rotate(-1.4deg);animation:floaty 7s ease-in-out infinite;
+}
+@keyframes floaty{0%,100%{transform:rotate(-1.4deg) translateY(0)}50%{transform:rotate(-.6deg) translateY(-5px)}}
+/* 图表容器：外圈虚线 + 柔和光，像仪表 */
+.orb{position:relative;display:grid;place-items:center;padding:6px}
+.orb::before{content:"";position:absolute;inset:6%;border-radius:50%;
+  border:1px dashed rgba(109,92,224,.22);animation:spinSlow 48s linear infinite}
+.orb::after{content:"";position:absolute;inset:14%;border-radius:50%;z-index:-1;
+  background:radial-gradient(circle,rgba(167,139,250,.22),transparent 68%);filter:blur(8px)}
+@keyframes spinSlow{to{transform:rotate(360deg)}}
+.idcard .avatar img{width:100%;height:100%;object-fit:cover;border-radius:10px;display:block}
+.tcg .art img.big{width:62%;aspect-ratio:1/1;object-fit:cover;border-radius:18px;
+  border:2px solid rgba(255,255,255,.9);box-shadow:0 8px 16px rgba(93,63,140,.25)}
+.dex .pic img.big{width:118px;height:118px;border-radius:50%;object-fit:cover;
+  border:2px solid rgba(255,255,255,.95);box-shadow:0 8px 16px rgba(93,63,140,.2)}
+
+
+.report-sec{background:rgba(255,255,255,.62);border:1px solid var(--line);border-radius:16px;padding:13px 16px;margin-bottom:10px}
+.report-sec h3{margin:0 0 7px;font-family:var(--font-ui);font-size:var(--fs-md);color:#3a3260}
+.report-sec ul{margin:0;padding-left:18px;color:var(--ink2);font-size:var(--fs-sm);line-height:1.8}
+
 @media (max-width:820px){
   .layout{grid-template-columns:1fr}
   .rail{position:static;flex-direction:row;overflow-x:auto;border-radius:18px}
   .tab{min-width:76px}
   .radarwrap{grid-template-columns:1fr}
+}
+
+/* ════════════════════════════════════════════════════════════
+   v1.4.0 视觉：氛围层（梦幻）+ HUD（科技）+ 节奏（动效）
+   —— 只用 transform/opacity 做动画，prefers-reduced-motion 全关
+   ════════════════════════════════════════════════════════════ */
+:root{
+  --ease:cubic-bezier(.22,.85,.2,1);
+  --glow-a:#a78bfa; --glow-b:#5eead4; --glow-c:#f0abfc; --glow-d:#93c5fd;
+  --hud:#6f66a8; --hud-line:rgba(111,102,168,.28);
+}
+
+/* ① 极光层：三团缓慢漂移的柔光，压在所有内容下面 */
+body::before{
+  content:"";position:fixed;inset:-20vmax;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(38vmax 30vmax at 14% 8%,rgba(139,92,246,.6),transparent 62%),
+    radial-gradient(34vmax 28vmax at 88% 6%,rgba(240,171,252,.5),transparent 64%),
+    radial-gradient(42vmax 34vmax at 78% 84%,rgba(45,212,191,.42),transparent 66%),
+    radial-gradient(32vmax 28vmax at 16% 92%,rgba(96,165,250,.5),transparent 68%);
+  filter:blur(30px) saturate(1.25);
+  animation:auroraDrift 44s ease-in-out infinite alternate;
+  opacity:.55;
+  /* 中间留白：只在四周发光，内容区别糊成一片白雾 */
+  mask-image:radial-gradient(130% 105% at 50% 42%,transparent 26%,#000 78%);
+  -webkit-mask-image:radial-gradient(130% 105% at 50% 42%,transparent 26%,#000 78%);
+}
+@keyframes auroraDrift{
+  0%{transform:translate3d(-2%,-1%,0) scale(1)}
+  50%{transform:translate3d(2%,2%,0) scale(1.08)}
+  100%{transform:translate3d(-1%,3%,0) scale(1.03)}
+}
+/* ② 网格 + 扫描线：科技感底噪 */
+body::after{
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.55;
+  background-image:
+    linear-gradient(rgba(111,102,168,.055) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(111,102,168,.055) 1px,transparent 1px),
+    repeating-linear-gradient(180deg,rgba(255,255,255,.16) 0 2px,transparent 2px 4px);
+  background-size:44px 44px,44px 44px,100% 4px;
+  mask-image:radial-gradient(120% 90% at 50% 0%,#000 30%,transparent 78%);
+  -webkit-mask-image:radial-gradient(120% 90% at 50% 0%,#000 30%,transparent 78%);
+}
+
+/* ③ 卡片：玻璃 + 渐变描边 + 顶部高光 + HUD 角标 */
+.card{position:relative;box-shadow:0 1px 0 rgba(255,255,255,.9) inset,0 14px 34px -18px rgba(52,44,96,.35);
+  transition:transform .35s var(--ease),box-shadow .35s var(--ease)}
+@supports (mask-composite:exclude) or (-webkit-mask-composite:xor){
+  .card::before{
+    content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;
+    background:linear-gradient(140deg,rgba(155,139,247,.6),rgba(255,255,255,.05) 38%,rgba(94,234,212,.45) 72%,rgba(240,171,252,.5));
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;mask-composite:exclude;
+    opacity:.85;
+  }
+}
+.card::after{
+  content:"";position:absolute;inset:10px;border-radius:inherit;pointer-events:none;opacity:.5;
+  background:
+    linear-gradient(var(--hud-line),var(--hud-line)) left top/12px 1px no-repeat,
+    linear-gradient(var(--hud-line),var(--hud-line)) left top/1px 12px no-repeat,
+    linear-gradient(var(--hud-line),var(--hud-line)) right bottom/12px 1px no-repeat,
+    linear-gradient(var(--hud-line),var(--hud-line)) right bottom/1px 12px no-repeat;
+}
+.card:hover{transform:translateY(-1px)}
+
+/* ④ 章节标题：编号 + 字距，像仪表盘的分区标签 */
+.card{counter-increment:sec}
+.card h2{letter-spacing:.4px}
+.card h2::before{width:22px;height:14px;border-radius:4px;content:counter(sec,decimal-leading-zero);
+  font-family:var(--font-mono);font-size:9px;line-height:14px;text-align:center;color:#fff;
+  background:linear-gradient(180deg,#7f6eee,#6455d8);box-shadow:0 2px 6px rgba(100,85,216,.35)}
+.card h2::after{content:"";flex:1;height:1px;margin-left:4px;
+  background:linear-gradient(90deg,var(--hud-line),transparent)}
+
+/* ⑤ 节奏：进场错峰 + 视图切换 */
+@keyframes riseIn{from{opacity:0;transform:translateY(14px) scale(.995)}to{opacity:1;transform:none}}
+.card,.sc,.rec,.report-sec{animation:riseIn .5s var(--ease) both}
+#view-home .card:nth-child(1){animation-delay:.02s}
+#view-home .card:nth-child(2){animation-delay:.08s}
+#view-home .card:nth-child(3){animation-delay:.14s}
+#gallery .sc:nth-child(3n+1){animation-delay:.04s}
+#gallery .sc:nth-child(3n+2){animation-delay:.09s}
+#gallery .sc:nth-child(3n){animation-delay:.14s}
+.content>div:not(.hidden){animation:viewIn .38s var(--ease) both}
+@keyframes viewIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes popIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
+.laywrap canvas,.radarwrap canvas,.hero .hero-art{animation:popIn .6s var(--ease) both}
+
+/* ⑥ 进度条 / 双极轴：填充有过渡，条上有一道流光 */
+.track i,.livebar .track i,.axis-track i,.rankrow .track i,.dimrow .track i{
+  transition:width .85s var(--ease)}
+.progress i{position:relative;overflow:hidden}
+.progress i::after{
+  content:"";position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.75),transparent);
+  animation:sheen 2.4s ease-in-out infinite}
+@keyframes sheen{0%{transform:translateX(-100%)}60%,100%{transform:translateX(220%)}}
+
+/* ⑦ 顶栏 HUD：小字状态条 + 呼吸点 */
+.topbar{position:relative}
+.topbar::after{
+  content:"";position:absolute;left:0;right:0;bottom:-8px;height:1px;
+  background:linear-gradient(90deg,transparent,var(--hud-line) 12%,var(--hud-line) 88%,transparent)}
+.sub{display:flex;align-items:center;gap:8px;font-size:var(--fs-xs);color:var(--dim);
+  font-family:var(--font-mono);letter-spacing:.02em}
+.sub::before{content:"SYS";font-size:9px;letter-spacing:.18em;padding:1px 6px;border-radius:4px;
+  color:#5b4fc4;background:rgba(109,92,224,.12);border:1px solid rgba(109,92,224,.2)}
+.pill{position:relative;overflow:hidden}
+.pill::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.55) 48%,transparent 62%);
+  transform:translateX(-120%);animation:pillSweep 6s ease-in-out infinite}
+@keyframes pillSweep{0%,70%{transform:translateX(-120%)}85%,100%{transform:translateX(120%)}}
+.dot.ok{animation:breathe 2.6s ease-in-out infinite}
+@keyframes breathe{0%,100%{box-shadow:0 0 0 4px rgba(61,189,139,.18)}50%{box-shadow:0 0 0 7px rgba(61,189,139,.06)}}
+
+/* ⑧ 标题与 hero：虹彩文字 + 角标 + 扫光 */
+h1{background:linear-gradient(100deg,#3a3260,#6d5ce0 40%,#b06ab3 62%,#3a3260);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.hero{position:relative}
+.hero .nm{background:linear-gradient(100deg,#2f2850,#6d5ce0 55%,#b06ab3);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.hero #r-meta{font-family:var(--font-mono);font-size:var(--fs-2xs);color:#7a6c8c;letter-spacing:.01em}
+.hero #r-meta::before{content:"▸ ";color:var(--accent)}
+@keyframes heroSheen{0%,72%{transform:translateX(-130%)}88%,100%{transform:translateX(130%)}}
+
+/* ⑨ 量表卡：悬停时描边发光 + 封面轻微放大 */
+.sc{transition:transform .3s var(--ease),box-shadow .3s var(--ease),border-color .3s;
+  background:linear-gradient(180deg,rgba(255,255,255,.93),rgba(250,248,255,.88))}
+.sc::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:3px;
+  background:var(--cat,#8d7ff3);opacity:.85;box-shadow:0 0 10px var(--cat,#8d7ff3)}
+.sc:hover{box-shadow:0 16px 34px -18px rgba(88,74,180,.5),0 0 0 1px rgba(155,139,247,.45)}
+.sc .cov{transition:transform .4s var(--ease)}
+.sc:hover .cov{transform:scale(1.06) rotate(-1deg)}
+.sc::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;
+  background:radial-gradient(120px 80px at var(--mx,50%) var(--my,0%),rgba(167,139,250,.25),transparent 70%);
+  transition:opacity .3s}
+.sc:hover::after{opacity:1}
+
+/* ⑩ 按钮：流光扫过 */
+button{position:relative;overflow:hidden}
+button::after{content:"";position:absolute;inset:0;pointer-events:none;transform:translateX(-120%);
+  background:linear-gradient(100deg,transparent 35%,rgba(255,255,255,.45) 50%,transparent 65%);
+  transition:transform .5s var(--ease)}
+button:hover::after{transform:translateX(120%)}
+button.ghost::after{display:none}
+
+/* ⑪ 答题页：选项像仪器面板 */
+.opt{position:relative;transition:transform .2s var(--ease),border-color .2s,background .2s}
+.opt:hover{transform:translateX(2px)}
+.opt.on{box-shadow:0 0 0 1px rgba(109,92,224,.35),0 8px 20px -10px rgba(109,92,224,.6)}
+.qnav button.cur{animation:popIn .3s var(--ease)}
+
+/* ⑫ 结果页的分区标题加个短码 */
+.sec-h::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--hud-line),transparent)}
+
+/* ⑬ 低动效偏好：全关 */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none !important;transition:none !important}
+  body::before{filter:none;opacity:.5}
 }
 </style>
 </head>
@@ -480,7 +1028,7 @@ details.cm-paste textarea:focus{border-color:var(--accent);
 <div class="app">
   <div class="topbar">
     <div class="mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24"><path d="M12 3.5a4.5 4.5 0 0 0-4.5 4.5v1a3 3 0 0 0-1.5 5.7V16a3 3 0 0 0 3 3h1.2A3 3 0 0 0 15 17.6V14.7A3 3 0 0 0 13.5 9V8A4.5 4.5 0 0 0 9 3.5"/><path d="M12 3.5V21"/></svg>
+      <img src="art/fox/01_s.webp" alt="">
     </div>
     <div>
       <h1>心理测评室</h1>
@@ -512,6 +1060,9 @@ details.cm-paste textarea:focus{border-color:var(--accent);
       <button class="tab" data-tab="compat">
         <svg viewBox="0 0 24 24"><path d="M8.5 13.5a3.5 3.5 0 1 1 0-7c2.5 0 4.5 4 7 4a3.5 3.5 0 1 1 0 7c-2.5 0-4.5-4-7-4z"/><path d="M12 4v2M12 18v2"/></svg><span>默契</span>
       </button>
+      <button class="tab" data-tab="report">
+        <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 15V9M12 15v-4M16 15v-6"/><path d="M7 19v2M17 19v2"/></svg><span>画像</span>
+      </button>
       <button class="tab" data-tab="about">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.8"/></svg><span>关于</span>
       </button>
@@ -537,12 +1088,18 @@ details.cm-paste textarea:focus{border-color:var(--accent);
           </div>
         </div>
 
+        <div class="card" id="recommend-card">
+          <h2>今天从这份开始</h2>
+          <div class="pick" id="recommend"></div>
+        </div>
+
         <div class="card">
           <h2>选一份开始</h2>
-          <div class="row" style="margin-bottom:12px">
+          <div class="row" style="margin-bottom:8px">
             <input id="q" placeholder="搜索量表名称或简介" style="min-width:220px">
             <div class="row" id="cats"></div>
           </div>
+          <div class="row" id="durs" style="margin-bottom:12px"></div>
           <div id="gallery"></div>
         </div>
         <div class="card">
@@ -568,6 +1125,7 @@ details.cm-paste textarea:focus{border-color:var(--accent);
             <h3 class="q" id="qtext">—</h3>
             <div class="muted" id="q-hint" style="margin:-8px 0 12px">按第一反应选就好，没有对错。</div>
             <div class="opts" id="opts"></div>
+            <div class="qnav" id="qnav" aria-label="题号跳转"></div>
           </div>
           <div class="live" id="live"></div>
           <div class="row" style="justify-content:space-between;margin-top:14px">
@@ -582,13 +1140,20 @@ details.cm-paste textarea:focus{border-color:var(--accent);
       <div id="view-result" class="hidden">
         <div class="card">
           <div id="risk-box"></div>
-          <div class="hero">
-            <div class="hero-art" id="hero-art" aria-hidden="true"><span id="hero-emoji">🧩</span></div>
-            <div class="code" id="r-code">—</div>
-            <div class="nm" id="r-name">—</div>
-            <div class="sum" id="r-sum"></div>
-            <div class="muted" id="r-meta" style="margin-top:8px"></div>
+          <div class="hero" id="result-hero">
+            <div class="hero-art" id="hero-art" aria-hidden="true">
+              <img id="hero-img" alt="">
+              <span id="hero-emoji">🧩</span>
+            </div>
+            <div class="hero-body">
+              <div class="code" id="r-code">—</div>
+              <div class="nm" id="r-name">—</div>
+              <div class="sum" id="r-sum"></div>
+              <div class="muted" id="r-meta" style="margin-top:8px"></div>
+            </div>
           </div>
+
+          <div id="layout-box"></div>
 
           <div class="sec-h" id="why-title">为什么是这个结果</div>
           <div id="why-box"></div>
@@ -622,6 +1187,23 @@ details.cm-paste textarea:focus{border-color:var(--accent);
           <div id="records"></div>
           <div id="trend"></div>
         </div>
+      </div>
+
+      <!-- 综合画像 -->
+      <div id="view-report" class="hidden">
+        <div class="card">
+          <h2>综合画像</h2>
+          <div class="muted" style="margin-bottom:10px">
+            把你自己各份量表的<b>最近一次</b>结果拼成一份可读报告：人格底座、最近状态、优势、职业与关系，再给下一步建议。
+            文字由本机根据分数生成，不联网、不是诊断。
+          </div>
+          <div class="row">
+            <button id="btn-report">生成 / 刷新</button>
+            <button class="ghost" id="btn-report-copy">复制全文</button>
+            <span class="muted" id="report-meta"></span>
+          </div>
+        </div>
+        <div id="report-body"></div>
       </div>
 
       <!-- 猫娘塔罗 -->
@@ -859,14 +1441,21 @@ details.cm-paste textarea:focus{border-color:var(--accent);
           <h2>版权与来源</h2>
           <div class="kv">
             <div class="line"><b>大五人格</b><span>IPIP 大五因子标记（Goldberg）条目来自 International Personality Item Pool（ipip.ori.org），公共领域，每因子 20 题。</span></div>
+            <div class="line"><b>大五 30 分面</b><span>IPIP-NEO-120（Johnson, 2014）原题：30 个分面 × 4 题共 120 题，属 IPIP 公共领域；中文为本插件自译。</span></div>
+            <div class="line"><b>性格优势 24 项</b><span>IPIP-VIA-R（Bluemke 等, 2021）原题：24 个优势 × 4 题共 96 题，属 IPIP 公共领域；中文为本插件自译。</span></div>
             <div class="line"><b>16 型人格</b><span>OEJTS 1.2（Open Extended Jungian Type Scales，Eric Jorgenson），CC BY-NC-SA 4.0，非商业使用；与 MBTI 无关联。</span></div>
             <div class="line"><b>职业兴趣</b><span>O*NET Interest Profiler（美国劳工部）原题，属美国政府作品，公共领域。</span></div>
             <div class="line"><b>PHQ-9</b><span>Kroenke 等，公开提供，复制/翻译无需授权。</span></div>
             <div class="line"><b>GAD-7</b><span>Spitzer 等，公开提供，复制无需授权。</span></div>
             <div class="line"><b>UCLA 简版</b><span>Hughes 等（2004），研究用途公开可复现。</span></div>
+            <div class="line"><b>PSS-10 / DASS-21 / PANAS</b><span>压力知觉（Cohen 等, 1983；PSS 版权 © 1994 Sheldon Cohen）、情绪状态（Lovibond 等, 1995）、正负情感（Watson 等, 1988）。PSS 的三档分级是应用界常用约定，<b>不是原文献切点</b>；DASS-21 的切点按原量表。</span></div>
+            <div class="line"><b>WHO-5 / SWLS / RSES / GSES</b><span>WHO-5（WHO, 1998，非商业免费）、生活满意度（Diener 等, 1985，免费使用需署名）、自尊（Rosenberg, 1965）、一般自我效能（Schwarzer &amp; Jerusalem, 1995）。后两者原量表没有官方切点，分档是本插件为便于阅读设的。</span></div>
+            <div class="line"><b>ISI（受版权保护）</b><span>失眠严重度指数（Morin, 1993/1996），版权归作者并由 Mapi Research Trust 分发；本插件仅作个人非商业自评，公开分发或商用需向版权方取得授权。</span></div>
+            <div class="line"><b>FFMQ-15 / ERQ / BSMAS / BSCS / TIPI / Mini-SPIN</b><span>正念五因素（Baer 等, 2012）、情绪调节（Gross &amp; John, 2003）、社交媒体使用（Andreassen 等, 2016）、自我控制（Tangney 等, 2004）、十项人格（Gosling 等, 2003）、社交焦虑简筛（Connor 等, 2001）：均为学界公开量表，按引用作者方式使用；中文为本插件自译。</span></div>
+            <div class="line"><b>工作价值观</b><span>只借用 O*NET 的六个价值观构念（O*NET 测评工具本身 © 美国劳工部）；题目与计分为本插件自编。</span></div>
             <div class="line"><b>猫娘塔罗</b><span>78 张牌面为莱德-伟特（Rider-Waite-Smith）塔罗 1909 年版 Pamela Colman Smith 原版扫描（Wikimedia Commons，公有领域）；牌名与传统关键词属公共领域；猫娘解读由本机配置的大模型现场生成，只作娱乐与自我探索。</span></div>
             <div class="line"><b>解压小游戏</b><span>电子板（Mikutap 玩法）与切水果移植自本作者的学习辅助猫娘插件；电子板默认音源为 FluidR3_GM 采样（CC BY 3.0，via gleitz/midi-js-soundfonts）；面板里导入的本地音源只存本机 <code>data/mikutap_audio/</code>，不进发行包。</span></div>
-            <div class="line"><b>关于分数</b><span>这些量表没有常模样本，分数只反映「这份量表内部」的相对强度，不是人群排名。</span></div>
+            <div class="line"><b>关于分数</b><span>这些量表没有常模样本，分数只反映「这份量表内部」的相对强度，不是人群排名。标了「常用分档 / 插件自设分档」的字样就是提醒：那不是官方切点。</span></div>
             <div class="line"><b>自编题目</b><span>九型人格、社交能量、情绪智力、心理韧性、拖延症、成人依恋、爱的语言，以及魔法分院、灵魂动物等趣味量表为本插件自编，非官方测验，仅作探索与娱乐。</span></div>
           </div>
         </div>
@@ -934,7 +1523,7 @@ const CRISIS = [
   '情况紧急请立刻拨打 120 / 110。',
 ];
 let API_BASE = localStorage.getItem('assess_base');
-let VIEWS = ['home', 'quiz', 'result', 'records', 'tarot', 'play', 'compat', 'about'];
+let VIEWS = ['home', 'quiz', 'result', 'records', 'report', 'tarot', 'play', 'compat', 'about'];
 // 解压小游戏（后面定义的 mikutap / fruitGame 会把自己挂上来；go() 要在它们之前用）
 let RELAX = null;
 
@@ -997,8 +1586,41 @@ function go(view){
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.tab === view));
   document.querySelector('.app').classList.toggle('wide', view === 'play');
   if (view !== 'play' && RELAX) RELAX.leave();   // 离开解压页就停声音/停帧
+  if (view === 'report') loadReport();           // 进画像页就顺手拉一次，别让用户先点「生成」
 }
 document.querySelectorAll('.tab').forEach((tab) => { tab.onclick = () => go(tab.dataset.tab); });
+
+// ── 视觉节奏：条形从 0 长出来、数字滚动、卡片跟随光标发光 ────────
+function animateBars(root){
+  const host = root || document;
+  const bars = [...host.querySelectorAll('.track i, .livebar .track i, .axis-track i, .rankrow .track i')];
+  bars.forEach((bar) => {
+    const target = bar.style.width;
+    if (!target) return;
+    bar.style.width = '0%';
+    requestAnimationFrame(() => requestAnimationFrame(() => { bar.style.width = target; }));
+  });
+}
+function countUp(el, text){
+  const raw = String(text == null ? '' : text).trim();
+  if (!/^\d{1,4}$/.test(raw)){ el.textContent = raw; return; }
+  const target = Number(raw);
+  const dur = 620;
+  const t0 = performance.now();
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / dur);
+    el.textContent = String(Math.round(target * (1 - Math.pow(1 - k, 3))));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+document.addEventListener('pointermove', (ev) => {
+  const card = ev.target && ev.target.closest && ev.target.closest('.sc');
+  if (!card) return;
+  const r = card.getBoundingClientRect();
+  card.style.setProperty('--mx', ((ev.clientX - r.left) / r.width * 100).toFixed(1) + '%');
+  card.style.setProperty('--my', ((ev.clientY - r.top) / r.height * 100).toFixed(1) + '%');
+}, {passive: true});
 
 // ── 鼠标轨迹 + 点击反馈 ────────────────────────────────────────
 // 轨迹：pointermove + mousemove 双监听（内嵌 webview 里 pointermove 偶发不派发，
@@ -1234,6 +1856,18 @@ function scheduleReconnect(){
   if (connFirstFail && Date.now() - connFirstFail > 30000) return;   // 敲够 30 秒还没起来就停手
   connTimer = setTimeout(() => { connTimer = 0; loadScales(); }, 1500);
 }
+const DURS = [
+  {key: 'all', label: '全部时长', test: () => true},
+  {key: 'short', label: '≤2 分钟', test: (s) => s.minutes <= 2},
+  {key: 'mid', label: '3-5 分钟', test: (s) => s.minutes >= 3 && s.minutes <= 5},
+  {key: 'long', label: '≥6 分钟', test: (s) => s.minutes >= 6},
+];
+let DUR = 'all';
+const CAT_EMOJI = {人格: '🧠', 情绪健康: '💙', 职业: '🧭', 关系: '💞', 趣味: '🎈', 优势: '🌟'};
+// 分类色：卡片的左侧光条、标签、推荐卡都吃这个
+const CAT_COLOR = {人格: '#8b5cf6', 情绪健康: '#2f9ee8', 职业: '#14b8a6',
+  关系: '#ef6aa8', 趣味: '#f0a83c', 优势: '#34c38f'};
+
 async function loadScales(){
   try {
     const res = await api('/api/scales');
@@ -1244,9 +1878,15 @@ async function loadScales(){
     $('cats').querySelectorAll('.chip').forEach((chip) => {
       chip.onclick = () => { CAT = chip.dataset.cat; loadScales(); };
     });
+    $('durs').innerHTML = DURS.map((d) =>
+      `<button class="chip ${d.key === DUR ? 'on' : ''}" data-dur="${d.key}">${esc(d.label)}</button>`).join('');
+    $('durs').querySelectorAll('.chip').forEach((chip) => {
+      chip.onclick = () => { DUR = chip.dataset.dur; loadScales(); };
+    });
     $('filter-scale').innerHTML = '<option value="">全部量表</option>' +
       SCALES.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
     renderGallery();
+    renderRecommend();
     connFails = 0;
     connFirstFail = 0;
     if (connTimer){ clearTimeout(connTimer); connTimer = 0; }
@@ -1256,39 +1896,108 @@ async function loadScales(){
     if (!connFirstFail) connFirstFail = Date.now();
     const retrying = Date.now() - connFirstFail <= 30000;
     markConn(false, retrying ? '连不上面板服务 · 正在重试…' : '连不上面板服务');
-    if (!retrying) $('gallery').innerHTML = `<div class="card">${esc(String(err))}</div>`;
+    if (!retrying) $('gallery').innerHTML = `<div class="card">
+      <img class="stk" src="art/sticker/dizzy.webp" alt="">
+      <div class="muted" style="text-align:center">${esc(String(err))}</div></div>`;
     scheduleReconnect();
   }
 }
+
+// 今日推荐：优先「收藏过但最久没做」，其次「最久没做的」，都没做过就推大五
+function renderRecommend(){
+  const box = $('recommend');
+  if (!box) return;
+  if (!SCALES.length){ box.innerHTML = '<div class="muted">正在读取量表…</div>'; return; }
+  const done = SCALES.filter((s) => s.done);
+  const pinned = SCALES.filter((s) => s.pinned);
+  let pick = null;
+  let why = '';
+  if (pinned.length){
+    pick = pinned.slice().sort((a, b) => (a.last_ts || 0) - (b.last_ts || 0))[0];
+    why = pick.done ? '你收藏的量表里最久没碰的那一份' : '你收藏了还没做的那一份';
+  } else if (done.length && done.length < SCALES.length){
+    const rest = SCALES.filter((s) => !s.done);
+    pick = rest[0];
+    why = `还有 ${rest.length} 份没做过，先挑一份短的`;
+  } else if (done.length){
+    pick = SCALES.slice().sort((a, b) => (a.last_ts || 0) - (b.last_ts || 0))[0];
+    why = '全都做过了，这份最久没更新';
+  } else {
+    pick = SCALES.find((s) => s.id === 'big5') || SCALES[0];
+    why = '第一次来，从最主流的那份开始';
+  }
+  if (!pick){ box.innerHTML = ''; return; }
+  const emoji = CAT_EMOJI[pick.category] || '🧩';
+  const cover = pick.cover ? `<img src="${esc(pick.cover)}" alt="">` : emoji;
+  box.innerHTML = `
+    <div class="emoji">${cover}</div>
+    <div class="body">
+      <b>${esc(pick.name)}</b>
+      <div class="muted">${esc(pick.intro)}</div>
+      <div class="muted" style="margin-top:4px">${esc(why)} · 题库 ${pick.bank_size || pick.count} 题 · 约 ${pick.minutes} 分钟${pick.done ? ` · 已做 ${pick.done} 次` : ''}</div>
+    </div>
+    <button data-go="${esc(pick.id)}">开始</button>`;
+  const btn = box.querySelector('[data-go]');
+  if (btn) btn.onclick = () => openStarter(pick.id);
+}
+
 function renderGallery(){
   const q = $('q').value.trim().toLowerCase();
+  const dur = DURS.find((d) => d.key === DUR) || DURS[0];
   const rows = SCALES.filter((s) => {
     if (CAT !== '全部' && s.category !== CAT) return false;
+    if (!dur.test(s)) return false;
     if (!q) return true;
-    return (s.name + s.intro + s.id).toLowerCase().includes(q);
+    return (s.name + s.intro + s.id + (s.tags || []).join(' ')).toLowerCase().includes(q);
   });
   const card = (s) => `
-    <div class="sc" data-id="${esc(s.id)}">
-      <div class="top"><span class="nm">${esc(s.name)}</span><span class="cat">${esc(s.category)}</span></div>
+    <div class="sc ${s.pinned ? 'pinned' : ''}" data-id="${esc(s.id)}"
+         style="--cat:${CAT_COLOR[s.category] || '#8d7ff3'}">
+      <button class="pin ${s.pinned ? 'on' : ''}" data-pin="${esc(s.id)}"
+        title="${s.pinned ? '取消收藏' : '收藏置顶'}" aria-label="收藏">${s.pinned ? '★' : '☆'}</button>
+      <div class="top">
+        ${s.cover ? `<img class="cov" src="${esc(s.cover)}" alt="" loading="lazy">` : ''}
+        <span class="nm">${esc(s.name)}</span>
+      </div>
       <div class="desc">${esc(s.intro)}</div>
-      <div class="meta"><span>${s.fixed ? `官方 ${s.bank_size || s.count} 题` : `题库 ${s.bank_size || s.count} 题 · 默认 ${s.default_items || s.count} 题`}</span><span>约 ${s.minutes} 分钟</span></div>
+      <div class="row" style="gap:6px;margin-top:2px">
+        <span class="tag cat">${esc(s.category)}</span>
+        ${s.public_domain ? `<span class="tag pub" title="${esc(s.license || '公开题库')}">公开题库</span>`
+          : `<span class="tag" title="${esc(s.license || '本插件自编条目')}">自编</span>`}
+        ${s.facet_count ? `<span class="tag">${s.facet_count} 个分面</span>` : ''}
+      </div>
+      <div class="meta"><span>${s.fixed ? `固定 ${s.bank_size || s.count} 题` : `题库 ${s.bank_size || s.count} 题 · 默认 ${s.default_items || s.count} 题`}</span><span>约 ${s.minutes} 分钟</span></div>
       ${s.done ? `<span class="done">已做 ${s.done} 次</span>` : ''}
     </div>`;
+  const sortPins = (list) => list.slice().sort((a, b) => Number(b.pinned) - Number(a.pinned));
   let html = '';
   if (!rows.length){
     html = '<div class="muted">没有匹配的量表</div>';
   } else if (CAT === '全部' && !q){
     for (const cat of CAT_ORDER){
-      const group = rows.filter((s) => s.category === cat);
+      const group = sortPins(rows.filter((s) => s.category === cat));
       if (!group.length) continue;
       html += `<div class="cat-h"><b>${cat}</b><span>${esc(CAT_DESC[cat] || '')}</span></div>
         <div class="grid">${group.map(card).join('')}</div>`;
     }
   } else {
-    html = `<div class="grid">${rows.map(card).join('')}</div>`;
+    html = `<div class="grid">${sortPins(rows).map(card).join('')}</div>`;
   }
   $('gallery').innerHTML = html;
-  $('gallery').querySelectorAll('.sc').forEach((el) => { el.onclick = () => openStarter(el.dataset.id); });
+  $('gallery').querySelectorAll('.pin').forEach((el) => {
+    el.onclick = async (ev) => {
+      ev.stopPropagation();
+      const res = await api('/api/pin', {id: el.dataset.pin});
+      if (res.ok) floatText(res.on ? '已收藏 ★' : '已取消收藏');
+      loadScales();
+    };
+  });
+  $('gallery').querySelectorAll('.sc').forEach((el) => {
+    el.onclick = (ev) => {
+      if (ev.target.closest('.pin')) return;
+      openStarter(el.dataset.id);
+    };
+  });
 }
 
 // ── 答题 ─────────────────────────────────────────────────────
@@ -1307,17 +2016,24 @@ function openStarter(id){
   const bank = meta.bank_size || meta.count;
   const min = Math.min(meta.min_items || 4, bank);
   const officialCount = meta.official_count || 0;   // ⚠ 必须先声明再用（TDZ 会让点击静默失败）
+  const isClin = meta.kind === 'clinical';
+  const wholeForm = !!officialCount && officialCount >= bank;   // 整卷照搬原题（IPIP-NEO-120 / PSS-10 …）
   const defN = Math.min(Math.max(meta.default_items || 0, min), bank);
   $('starter-name').textContent = meta.name;
-  $('starter-note').textContent = officialCount
+  $('starter-note').textContent = isClin && officialCount
     ? (defN === officialCount
         ? `题库 ${bank} 题。默认「官方 ${officialCount} 题」套用官方分级；选更多题则进入「扩展自评」。`
         : `题库 ${bank} 题。默认 ${defN} 题走「扩展自评」；选「官方 ${officialCount} 题」才套用官方分级。`)
-    : `题库 ${bank} 题，每次随机抽题（两次不会完全一样，用来减少「记住上次答案」的偏差）。`;
+    : (wholeForm
+        ? `整卷原题 ${bank} 题（照搬原量表，不抽题）。约 ${meta.minutes} 分钟，答完直接给结果。`
+        : `题库 ${bank} 题，每次随机抽题（两次不会完全一样，用来减少「记住上次答案」的偏差）。`);
 
   // 选项：按题库大小给一组合适的档位，永远至少有两个可选值
   let opts;
-  if (officialCount){
+  if (officialCount && wholeForm){
+    // 整卷量表：题量由原量表决定，不给「抽一半」的选项（会破坏分面/分级的可比性）
+    opts = [{n: bank, label: `全部 ${bank} 题`, sub: isClin ? '整卷 · 套官方分级' : '整卷原题'}];
+  } else if (officialCount){
     // 官方量表：官方原题（套官方分级）保留为可选项；默认与其余档位走「扩展自评」
     const ladder = [10, 20, 30, 40, 60, 100].filter((x) => x <= bank && x > officialCount);
     opts = [{n: officialCount, label: `官方 ${officialCount} 题`, sub: '套官方分级'}]
@@ -1346,9 +2062,9 @@ function openStarter(id){
       floatText(`已选 ${PICK_COUNT} 题`);
     };
   });
-  // 自定义题数
+  // 自定义题数（整卷量表不给改：题量由原量表决定）
   const customRow = $('starter-custom-row');
-  customRow.classList.toggle('hidden', meta.fixed);
+  customRow.classList.toggle('hidden', meta.fixed || wholeForm);
   if ($('starter-custom')) { $('starter-custom').value = ''; $('starter-custom').max = bank; }
   PICK_RANGE = {min, bank, officialCount};
   updatePickLabel();
@@ -1359,9 +2075,12 @@ function updatePickLabel(){
   const el = $('starter-tip');
   if (!el) return;
   const {min, bank, officialCount} = PICK_RANGE;
-  const hint = officialCount
-    ? ` · 官方 ${officialCount} 题套官方分级，更多题算扩展自评`
-    : ` · 可选 ${min}~${bank} 题，题越多结果越稳`;
+  const whole = !!officialCount && officialCount >= bank;
+  const hint = whole
+    ? ' · 整卷原题，题量固定'
+    : (officialCount
+        ? ` · 官方 ${officialCount} 题套官方分级，更多题算扩展自评`
+        : ` · 可选 ${min}~${bank} 题，题越多结果越稳`);
   el.textContent = `✅ 当前已选 ${PICK_COUNT} 题${hint}`;
 }
 
@@ -1442,8 +2161,25 @@ function renderQuestion(){
   $('opts').querySelectorAll('.opt').forEach((el) => {
     el.onclick = () => pick(Number(el.dataset.v));
   });
+  renderQNav();
   $('btn-prev').disabled = IDX === 0;
   liveDims();
+}
+// 题号导航：一眼看到答到哪、哪几题空着，能直接跳
+function renderQNav(){
+  const nav = $('qnav');
+  if (!nav) return;
+  if (CUR.items.length > 120){ nav.classList.add('hidden'); return; }
+  nav.classList.remove('hidden');
+  nav.innerHTML = CUR.items.map((_, i) => {
+    const cls = i === IDX ? 'cur' : (ANSWERS[i] != null ? 'done' : '');
+    return `<button class="${cls}" data-i="${i}" title="第 ${i + 1} 题">${i + 1}</button>`;
+  }).join('');
+  nav.querySelectorAll('button').forEach((b) => {
+    b.onclick = () => { IDX = Number(b.dataset.i); renderQuestion(); };
+  });
+  const cur = nav.querySelector('.cur');
+  if (cur && cur.scrollIntoView) cur.scrollIntoView({block: 'nearest', inline: 'nearest'});
 }
 function pick(value){
   ANSWERS[IDX] = value;
@@ -1486,34 +2222,796 @@ async function submit(){
     go('result');
   } catch (err) { alert(String(err)); }
 }
+// ════════════════════════════════════════════════════════════
+// 一测一 UI（v1.2.0）：每份量表一套结果版式
+//   版式来自后端 scale.layout；没有就用 radar。
+// ════════════════════════════════════════════════════════════
+const LAYOUT_HINT = {
+  radar: '离边缘越远，说明那个维度上越突出。',
+  facet: '大维度给轮廓，分面告诉你轮廓是哪几块撑起来的。',
+  quadrant4: '四个方向不是分数高低，是你更常用哪一套能力。',
+  gauge: '这是一根刻度：分数只说明相对位置，不代表好坏。',
+  battery: '电量越低，说明同样的社交量对你消耗越大。',
+  duo: '两条线各自独立，可以同时高、也可以同时低。',
+  axes: '每条轴两端各是一种倾向，百分比是「偏向哪边更多」。',
+  wheel9: '圆盘上是九个类型：你落在哪一格，旁边两格就是侧翼。',
+  hexagon: '六个角各是一种兴趣倾向，面积越大越突出，最高三类组成兴趣码。',
+  quadrant: '横轴是「怕被抛弃」，纵轴是「怕太靠近」，四象限对应四种依恋。',
+  donut: '环的每一段是你在这门「语言」上的分量，越宽越常用。',
+  rank: '从上到下是你的排序，前两项才真正影响选择。',
+  clock: '指针是你的拖延浓度，外圈三种颜色是三种动机。',
+  bands: '指针落在哪一条带，就是这次的分级。',
+  bands3: '三条线各有一条分级带，互不替代。',
+  chat: '这段聊天记录是按你的群聊习惯生成的。',
+  badge: '这张卡是你这次的人格成就。',
+  cup: '这杯是按你的选项配出来的。',
+  idcard: '这张工牌是你在这家公司里的岗位画像。',
+  crest: '院徽上的元素来自你的选择。',
+  animal: '图鉴卡上的属性条对应你的作答。',
+};
+
+function hiDPI(id, w, h){
+  const c = document.getElementById(id);
+  if (!c) return null;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+  c.style.width = w + 'px'; c.style.height = h + 'px';
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return {ctx, w, h};
+}
+
+function loadArt(src){
+  return new Promise((resolve) => {
+    if (!src){ resolve(null); return; }
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = () => resolve(null);
+    im.src = src;
+  });
+}
+
+function drawArcGauge(id, pct, label, sub, color){
+  const w = 220, h = 152;
+  const g = hiDPI(id, w, h); if (!g) return;
+  const {ctx} = g;
+  const cx = w / 2, cy = h - 24, r = 84;
+  ctx.lineWidth = 16; ctx.lineCap = 'butt';
+  ctx.strokeStyle = 'rgba(109,92,224,.13)';
+  ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, 2 * Math.PI); ctx.stroke();
+  const a = Math.PI + Math.PI * Math.min(100, Math.max(0, pct)) / 100;
+  ctx.strokeStyle = color || '#6d5ce0';
+  ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, a); ctx.stroke();
+  ctx.strokeStyle = '#3a3260'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * (r - 8), cy + Math.sin(a) * (r - 8)); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, 5, 0, 7); ctx.fillStyle = '#3a3260'; ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#3a3260'; ctx.font = '600 22px system-ui, "Microsoft YaHei"';
+  ctx.fillText(label || '', cx, cy - 62);
+  ctx.fillStyle = '#857da6'; ctx.font = '12px system-ui, "Microsoft YaHei"';
+  ctx.fillText(sub || '', cx, cy - 42);
+}
+
+function drawWheel9(id, dims, mainKey, meta){
+  const w = 380, h = 356;
+  const g = hiDPI(id, w, h); if (!g) return;
+  const {ctx} = g;
+  const cx = w / 2, cy = h / 2, R = 100;
+  const pct = {};
+  dims.forEach((d) => { pct[d.key] = d.percent || 0; });
+  // 规范九型图：9 在正上，1 在顺时针 40°（θ = 40° × (n mod 9)），不是 1 在顶上
+  const th = (n) => ((n % 9) * 2 * Math.PI) / 9;
+  const at = (n) => [cx + Math.sin(th(n)) * R, cy - Math.cos(th(n)) * R];
+  // 三角 9-3-6 + 六边星 1-4-2-8-5-7-1（每条弦到圆心距离都是 0.5R）
+  const edges = [[9, 3], [3, 6], [6, 9], [1, 4], [4, 2], [2, 8], [8, 5], [5, 7], [7, 1]];
+  ctx.strokeStyle = 'rgba(109,92,224,.22)'; ctx.lineWidth = 1.3;
+  edges.forEach(([a, b]) => {
+    const p = at(a), q = at(b);
+    ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
+  });
+  const num = (key) => Number(String(key).replace('t', ''));
+  const mainN = num(mainKey || '');
+  // 整合/压力方向：只在主型上画两支小箭头（实线=整合，虚线=压力）
+  const arrow = (fromN, toN, color, dashed) => {
+    if (!fromN || !toN) return;
+    const [x1, y1] = at(fromN), [x2, y2] = at(toN);
+    const t = 0.62;
+    const ax = x1 + (x2 - x1) * t, ay = y1 + (y2 - y1) * t;
+    const ang = Math.atan2(y2 - y1, x2 - x1);
+    ctx.save();
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6;
+    if (dashed) ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x1 + (x2 - x1) * 0.28, y1 + (y2 - y1) * 0.28);
+    ctx.lineTo(ax, ay); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(ax + Math.cos(ang) * 8, ay + Math.sin(ang) * 8);
+    ctx.lineTo(ax + Math.cos(ang + 2.5) * 7, ay + Math.sin(ang + 2.5) * 7);
+    ctx.lineTo(ax + Math.cos(ang - 2.5) * 7, ay + Math.sin(ang - 2.5) * 7);
+    ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+    ctx.restore();
+  };
+  if (meta){
+    arrow(mainN, num(meta.growth), '#2e9c7a', false);
+    arrow(mainN, num(meta.stress), '#c98a2c', true);
+  }
+  const names = new Map((CUR.dimensions || []).map((d) => [d.key, d.name]));
+  ctx.textBaseline = 'middle';
+  for (let n = 1; n <= 9; n++){
+    const key = 't' + n;
+    const [x, y] = at(n);
+    const p = pct[key] || 0;
+    const isMain = key === mainKey;
+    const isWing = meta && (meta.wing || []).includes(key);
+    const r = isMain ? 9 : (isWing ? 7 : 6);
+    if (isMain){
+      ctx.beginPath(); ctx.arc(x, y, r + 6, 0, 7);
+      ctx.fillStyle = 'rgba(109,92,224,.16)'; ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 7);
+    ctx.fillStyle = isMain ? '#6d5ce0' : (isWing ? 'rgba(109,92,224,.62)' : 'rgba(109,92,224,.3)');
+    ctx.fill();
+    // 标签：按方位左/右对齐，避免在画布边缘被切掉
+    const t = th(n);
+    const cos = Math.sin(t);
+    const lx = cx + cos * (R + 34);
+    const ly = cy - Math.cos(t) * (R + 34);
+    ctx.textAlign = Math.abs(cos) < 0.25 ? 'center' : (cos > 0 ? 'left' : 'right');
+    ctx.fillStyle = isMain ? '#3a3260' : '#7a6c8c';
+    ctx.font = (isMain ? '700 12px' : '12px') + ' system-ui, "Microsoft YaHei"';
+    ctx.fillText(names.get(key) || key, lx, ly - 7);
+    ctx.font = '11px monospace';
+    ctx.fillStyle = isMain ? '#5b4fc4' : '#9b93b8';
+    ctx.fillText(p + '%', lx, ly + 8);
+  }
+}
+
+function drawHexagon(id, dims){
+  const w = 300, h = 300;
+  const g = hiDPI(id, w, h); if (!g) return;
+  const {ctx} = g;
+  const cx = w / 2, cy = h / 2 + 2, R = 88;
+  const order = ['R', 'I', 'A', 'S', 'E', 'C'];
+  const byKey = {};
+  dims.forEach((d) => { byKey[d.key] = d; });
+  const pt = (key, k) => {
+    const i = order.indexOf(key);
+    const a = -Math.PI / 2 + (i * Math.PI) / 3;
+    return [cx + Math.cos(a) * R * k, cy + Math.sin(a) * R * k];
+  };
+  ctx.strokeStyle = 'rgba(109,92,224,.16)'; ctx.lineWidth = 1;
+  for (let ring = 1; ring <= 3; ring++){
+    ctx.beginPath();
+    order.forEach((k, i) => {
+      const [x, y] = pt(k, ring / 3);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath(); ctx.stroke();
+  }
+  order.forEach((k) => {
+    const [x, y] = pt(k, 1);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y); ctx.stroke();
+  });
+  ctx.beginPath();
+  order.forEach((k, i) => {
+    // 0.12 兜底：分数为 0 也不塌进圆心，形状还能读
+    const p = 0.12 + 0.88 * Math.max(0, Math.min(100, (byKey[k] || {}).percent || 0)) / 100;
+    const [x, y] = pt(k, p);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(109,92,224,.2)'; ctx.fill();
+  ctx.strokeStyle = '#6d5ce0'; ctx.lineWidth = 2; ctx.stroke();
+  order.forEach((k) => {
+    const d = byKey[k] || {};
+    const p = ((d.percent || 0) / 100);
+    const [x, y] = pt(k, Math.max(0.06, p));
+    ctx.beginPath(); ctx.arc(x, y, 3.4, 0, 7); ctx.fillStyle = '#6d5ce0'; ctx.fill();
+    const [lx, ly] = pt(k, 1.16);
+    ctx.fillStyle = '#4d4670'; ctx.font = '12px system-ui, "Microsoft YaHei"';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText((d.name || k), lx, ly - 6);
+    ctx.fillStyle = '#857da6'; ctx.font = '11px monospace';
+    ctx.fillText((d.percent || 0) + '%', lx, ly + 8);
+  });
+}
+
+function drawQuadrant(id, q){
+  const w = 280, h = 280;
+  const g = hiDPI(id, w, h); if (!g) return;
+  const {ctx} = g;
+  const pad = 38, x0 = pad, y0 = pad, x1 = w - pad, y1 = h - pad;
+  const midX = (x0 + x1) / 2, midY = (y0 + y1) / 2;
+  // 四象限底色（低饱和、同明度）：左上=回避，右上=矛盾，左下=安全，右下=焦虑
+  const quads = [
+    ['rgba(193,221,249,.55)', '回避型', x0, y0],
+    ['rgba(252,204,190,.55)', '矛盾型', midX, y0],
+    ['rgba(201,233,235,.6)', '安全型', x0, midY],
+    ['rgba(254,231,207,.6)', '焦虑型', midX, midY],
+  ];
+  quads.forEach(([fill, label, qx, qy]) => {
+    ctx.fillStyle = fill;
+    ctx.fillRect(qx, qy, midX - x0, midY - y0);
+    ctx.fillStyle = 'rgba(39,34,52,.42)';
+    ctx.font = '11px system-ui, "Microsoft YaHei"';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, qx + (midX - x0) / 2, qy + 12);
+  });
+  ctx.strokeStyle = 'rgba(109,92,224,.35)'; ctx.lineWidth = 1;
+  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.beginPath(); ctx.moveTo(midX, y0); ctx.lineTo(midX, y1);
+  ctx.moveTo(x0, midY); ctx.lineTo(x1, midY); ctx.stroke();
+  const x = x0 + (x1 - x0) * (q.x / 100);
+  const y = y1 - (y1 - y0) * (q.y / 100);
+  // 落在中线 8% 以内：标成「混合/边界」，别硬塞一个象限
+  if (Math.abs(q.x - 50) < 8 || Math.abs(q.y - 50) < 8){
+    ctx.beginPath(); ctx.arc(x, y, 20, 0, 7);
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(39,34,52,.4)'; ctx.lineWidth = 1.2;
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.beginPath(); ctx.arc(x, y, 12, 0, 7); ctx.fillStyle = 'rgba(109,92,224,.16)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, 6.5, 0, 7); ctx.fillStyle = '#6d5ce0'; ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = '#857da6'; ctx.font = '11px system-ui, "Microsoft YaHei"';
+  ctx.textAlign = 'center';
+  ctx.fillText('焦虑低', x0 + 22, y1 + 16);
+  ctx.fillText('焦虑高', x1 - 22, y1 + 16);
+  ctx.save(); ctx.translate(x0 - 12, y1 - 18); ctx.rotate(-Math.PI / 2);
+  ctx.fillText('回避低', 0, 0); ctx.restore();
+  ctx.save(); ctx.translate(x0 - 12, y0 + 18); ctx.rotate(-Math.PI / 2);
+  ctx.fillText('回避高', 0, 0); ctx.restore();
+}
+
+function drawDonut(id, dims){
+  const w = 240, h = 220;
+  const g = hiDPI(id, w, h); if (!g) return;
+  const {ctx} = g;
+  const cx = w / 2, cy = h / 2, r = 78, thick = 26;
+  const total = dims.reduce((a, b) => a + Math.max(0, b.percent || 0), 0) || 1;
+  const colors = ['#8b6bb1', '#7fbfa8', '#e2a25f', '#e2795f', '#6f9fd8'];
+  let a0 = -Math.PI / 2;
+  dims.forEach((d, i) => {
+    const span = (Math.max(0, d.percent || 0) / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, a0, a0 + span);
+    ctx.strokeStyle = colors[i % colors.length];
+    ctx.lineWidth = thick; ctx.stroke();
+    a0 += span;
+  });
+  ctx.fillStyle = '#3a3260'; ctx.textAlign = 'center';
+  ctx.font = '600 15px system-ui, "Microsoft YaHei"';
+  ctx.fillText(dims[0] ? dims[0].name : '', cx, cy - 2);
+  ctx.fillStyle = '#857da6'; ctx.font = '12px system-ui';
+  ctx.fillText(dims[0] ? dims[0].percent + '%' : '', cx, cy + 16);
+}
+
+function drawClock(id, pct, dims){
+  const w = 260, h = 268;
+  const g = hiDPI(id, w, h); if (!g) return;
+  const {ctx} = g;
+  const cx = w / 2, cy = h / 2, R = 84;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7);
+  ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(109,92,224,.28)'; ctx.lineWidth = 2; ctx.stroke();
+  const colors = ['#8b6bb1', '#e2a25f', '#7fbfa8'];
+  (dims || []).forEach((d, i) => {
+    const a = -Math.PI / 2 + (i * 2 * Math.PI) / 3;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(a) * R * 0.74, cy + Math.sin(a) * R * 0.74, 14, 0, 7);
+    ctx.fillStyle = colors[i % 3] + '33'; ctx.fill();
+    ctx.fillStyle = '#6a5c80'; ctx.font = '10px system-ui, "Microsoft YaHei"';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(d.name || d.key, cx + Math.cos(a) * R * 1.3, cy + Math.sin(a) * R * 1.3);
+  });
+  const ang = -Math.PI / 2 + (Math.min(100, pct) / 100) * Math.PI * 2;
+  ctx.strokeStyle = '#6d5ce0'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + Math.cos(ang) * (R - 14), cy + Math.sin(ang) * (R - 14)); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, 7, 0, 7); ctx.fillStyle = '#6d5ce0'; ctx.fill();
+  ctx.fillStyle = '#3a3260'; ctx.font = '600 18px system-ui, "Microsoft YaHei"';
+  ctx.textAlign = 'center'; ctx.fillText(pct + '%', cx, cy + 34);
+  ctx.fillStyle = '#857da6'; ctx.font = '11px system-ui'; ctx.fillText('拖延浓度', cx, cy + 50);
+}
+
+const LAYOUTS = {
+  radar(res){ return {html: `<div class="hintline">${esc(LAYOUT_HINT.radar)}</div>`}; },
+
+  facet(res){
+    return {html: `<div class="hintline">${esc(LAYOUT_HINT.facet)}</div>`};
+  },
+
+  quadrant4(res){
+    const dims = res.dims || [];
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.quadrant4)}</div>
+        <div class="quad4">${dims.map((d) => `
+          <div class="q4card">
+            <div class="q4h">${esc(d.name || d.key)}</div>
+            <div class="q4v">${d.percent}%</div>
+            <div class="q4t">${esc((CUR.dimensions || []).find((x) => x.key === d.key)?.tip || d.tip || '')}</div>
+          </div>`).join('')}</div>`,
+    };
+  },
+
+  gauge(res){
+    const dim = (res.dims || [])[0] || {};
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.gauge)}</div>
+        <div class="laywrap"><canvas id="lay-gauge"></canvas></div>`,
+      draw(){ drawArcGauge('lay-gauge', dim.percent || 0, (dim.percent || 0) + '%', dim.name || ''); },
+    };
+  },
+
+  battery(res){
+    const get = (k) => (res.dims || []).find((d) => d.key === k) || {};
+    const drain = get('drain'), charge = get('charge'), thr = get('threshold');
+    const level = Math.max(0, Math.min(100, 100 - (drain.percent || 0)));
+    const cells = Math.round(level / 10);
+    const cls = level <= 25 ? 'low' : (level <= 50 ? 'warn' : 'on');
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.battery)}</div>
+        <div class="batterybox">
+          <div class="batt">${Array.from({length: 10}, (_, i) =>
+            `<i class="cell ${i < cells ? cls : ''}"></i>`).join('')}</div>
+          <div class="battlabel"><span>一场满员社交之后</span><b>${level}% 电量</b></div>
+          <div class="deltas" style="margin-top:10px">
+            <span class="delta"><b>${charge.percent || 0}%</b> 独处充电</span>
+            <span class="delta"><b>${thr.percent || 0}%</b> 刺激阈值</span>
+          </div>
+        </div>`,
+      why: {
+        title: '三条线各是什么',
+        html: (res.dims || []).map((d) => `
+          <div class="framebox">
+            <div class="fb-top"><span class="fb-name">${esc(d.name || d.key)}</span>
+              <span class="fb-val">${d.percent}%${d.band ? ' · ' + esc(d.band) : ''}</span></div>
+            <div class="track"><i style="width:${d.percent}%"></i></div>
+            ${d.tip ? `<div class="fb-tip">${esc(d.tip)}</div>` : ''}
+          </div>`).join(''),
+      },
+    };
+  },
+
+  duo(res){
+    const dims = res.dims || [];
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.duo)}</div>
+        <div class="duowrap">${dims.slice(0, 2).map((d, i) => `
+          <div class="dial"><canvas id="lay-duo-${i}"></canvas>
+            <div class="muted">${esc(d.name || d.key)}</div></div>`).join('')}</div>`,
+      draw(){
+        dims.slice(0, 2).forEach((d, i) => {
+          drawArcGauge(`lay-duo-${i}`, d.percent || 0, (d.percent || 0) + '%', d.name || '', i ? '#7fbfa8' : '#8b6bb1');
+        });
+      },
+    };
+  },
+
+  axes(res){
+    return {html: `<div class="hintline">${esc(LAYOUT_HINT.axes)}</div>`};
+  },
+
+  wheel9(res){
+    const meta = res.ennea || {};
+    const main = meta.code || (res.type || {}).code || '';
+    const names = new Map((CUR.dimensions || []).map((d) => [d.key, d.name]));
+    const wingNames = (meta.wing || []).map((k) => names.get(k) || k).join(' / ');
+    const rank = (res.dims || []).slice(0, 3);
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.wheel9)}</div>
+        <div class="laywrap"><div class="orb"><canvas id="lay-wheel"></canvas></div></div>
+        <div class="notice" style="margin-top:0">
+          主型：<b>${esc(names.get(main) || main)}</b>${meta.center ? ' · ' + esc(meta.center) : ''}
+          ${wingNames ? `｜侧翼：${esc(wingNames)}` : ''}
+          ${meta.growth ? `<br>顺的时候会像 ${esc(names.get(meta.growth) || meta.growth)}（整合方向），
+            压力大的时候会掉进 ${esc(names.get(meta.stress) || meta.stress)}（压力方向）。` : ''}
+        </div>`,
+      draw(){ drawWheel9('lay-wheel', res.dims || [], main, meta); },
+      why: {
+        title: '九个类型的相对强度',
+        html: rank.map((d, i) => `
+          <div class="rankrow ${i === 0 ? 'gold' : (i === 1 ? 'silver' : '')}">
+            <span class="no">${i + 1}</span><span class="nm">${esc(d.name || d.key)}</span>
+            <span class="track"><i style="width:${d.percent}%"></i></span>
+            <span class="pc">${d.percent}%</span>
+          </div>`).join('') + `<div class="fb-tip" style="margin-top:8px">
+            只有主型与侧翼有意义，其余类型的分差不用逐个解读。侧翼是紧挨主型的两个类型里分数更高的那个。</div>`,
+      },
+    };
+  },
+
+  hexagon(res){
+    const dims = res.dims || [];
+    const code = res.code || (res.type || {}).code || '';
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.hexagon)}</div>
+        <div class="laywrap"><canvas id="lay-hex"></canvas></div>
+        ${code ? `<div class="notice good" style="margin-top:0">兴趣码：<b>${esc(code)}</b>　
+          前三项：${dims.slice(0, 3).map((d) => esc(d.name)).join('、')}</div>` : ''}`,
+      draw(){ drawHexagon('lay-hex', dims); },
+    };
+  },
+
+  quadrant(res){
+    const q = res.quadrant || {x: 50, y: 50};
+    const type = res.type || {};
+    const meta = {
+      secure: ['安全型', '能靠近，也能独处'],
+      anxious: ['焦虑型', '怕被丢下，信号一变就紧张'],
+      avoidant: ['回避型', '太近就想退，靠自己更安全'],
+      fearful: ['矛盾型', '又想靠近，又怕受伤'],
+    }[(res.quadrant || {}).code || ''] || [type.name || '', type.summary || ''];
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.quadrant)}</div>
+        <div class="bandswrap">
+          <div class="laywrap" style="margin:0"><canvas id="lay-quad"></canvas></div>
+          <div>
+            <div class="sec-h" style="margin-top:0">${esc(meta[0])}</div>
+            <div class="muted">${esc(meta[1])}</div>
+            <div class="deltas" style="margin-top:8px">
+              <span class="delta"><b>${q.x}%</b> 依恋焦虑</span>
+              <span class="delta"><b>${q.y}%</b> 依恋回避</span>
+            </div>
+            <div class="fb-tip" style="margin-top:8px">两条轴都低于 55% 记为安全型；只有一条高就是对应的焦虑/回避型；两条都高是矛盾型。</div>
+          </div>
+        </div>`,
+      draw(){ drawQuadrant('lay-quad', q); },
+      why: {
+        title: '四种依恋各自长什么样',
+        html: [
+          ['secure', '安全型', '能靠近也能独处；信号变了会先问，而不是先猜。'],
+          ['anxious', '焦虑型', '很在乎关系，一点变化就会紧张；需要反复确认才安心。'],
+          ['avoidant', '回避型', '重视独立，太近就想退；更愿意用做事表达在乎。'],
+          ['fearful', '矛盾型', '又想靠近又怕受伤，进退之间常拉锯。'],
+        ].map(([key, nm, desc]) => `
+          <div class="framebox ${((res.quadrant || {}).code || '') === key ? 'top' : ''}"
+               style="${((res.quadrant || {}).code || '') === key ? 'border-color:rgba(109,92,224,.45);background:rgba(109,92,224,.08)' : ''}">
+            <div class="fb-top"><span class="fb-name">${nm}</span>
+              ${((res.quadrant || {}).code || '') === key ? '<span class="fb-val">你在这里</span>' : ''}</div>
+            <div class="fb-tip">${desc}</div>
+          </div>`).join(''),
+      },
+    };
+  },
+
+  donut(res){
+    const dims = res.dims || [];
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.donut)}</div>
+        <div class="laywrap"><div class="orb"><canvas id="lay-donut"></canvas></div></div>`,
+      draw(){ drawDonut('lay-donut', dims); },
+      why: {
+        title: '五种语言的分量',
+        html: dims.map((d, i) => `
+          <div class="rankrow ${i === 0 ? 'gold' : (i === 1 ? 'silver' : '')}">
+            <span class="no">${i + 1}</span><span class="nm">${esc(d.name || d.key)}</span>
+            <span class="track"><i style="width:${Math.round(d.percent / Math.max(1, dims[0].percent) * 100)}%"></i></span>
+            <span class="pc">${d.percent}%</span>
+          </div>`).join('') + `<div class="fb-tip" style="margin-top:8px">
+            前两项是你的「首选频道」；最后一项不是不重要，只是你不靠它接收爱。</div>`,
+      },
+    };
+  },
+
+  rank(res){
+    const dims = res.dims || [];
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.rank)}</div>
+        <div class="ranklist">${dims.slice(0, 8).map((d, i) => `
+          <div class="rankrow ${i === 0 ? 'gold' : (i === 1 ? 'silver' : '')}">
+            <span class="no">${i + 1}</span><span class="nm">${esc(d.name || d.key)}</span>
+            <span class="track"><i style="width:${d.percent}%"></i></span>
+            <span class="pc">${d.percent}%</span>
+          </div>`).join('')}</div>`,
+      why: {
+        title: '前两项为什么最重要',
+        html: dims.slice(0, 2).map((d, i) => `
+          <div class="framebox">
+            <div class="fb-top"><span class="fb-name">${i === 0 ? '首选' : '次选'}：${esc(d.name || d.key)}</span>
+              <span class="fb-val">${d.percent}%</span></div>
+            <div class="fb-tip">${esc(d.tip || '')}</div>
+          </div>`).join('') +
+          `<div class="fb-tip">这一段描述的是「你更愿意为哪种东西付代价」，不是能力高低。</div>`,
+      },
+    };
+  },
+
+  clock(res){
+    const top = (res.dims || [])[0] || {};
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.clock)}</div>
+        <div class="laywrap"><canvas id="lay-clock"></canvas></div>
+        <div class="notice" style="margin-top:0">
+          主类型：<b>${esc(top.name || '')}</b>（${top.percent || 0}%）｜${esc(top.tip || '')}
+        </div>`,
+      draw(){ drawClock('lay-clock', top.percent || 0, res.dims || []); },
+    };
+  },
+
+  bands(res){
+    const bands = res.bands || [];
+    const max = res.max_total || 0;
+    const total = Number(res.total || 0);
+    const pct = max ? Math.round(total / max * 100) : 0;
+    const level = res.level || '';
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.bands)}</div>
+        <div class="bandswrap">
+          <div class="laywrap" style="margin:0"><canvas id="lay-band"></canvas></div>
+          <div class="bandlist">${bands.map((b) => {
+            const on = level && b[2] === level;
+            return `<div class="bandrow ${on ? 'on' : ''}"><i></i><span>${esc(b[2])}</span>
+              <span class="rg">${b[0]}–${b[1]} 分</span></div>`;
+          }).join('')}</div>
+        </div>`,
+      draw(){
+        drawArcGauge('lay-band', pct, String(total), max ? `满分 ${max}` : '', '#8b6bb1');
+      },
+    };
+  },
+
+  bands3(res){
+    const dims = res.dims || [];
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.bands3)}</div>
+        <div class="duowrap" style="grid-template-columns:repeat(3,1fr)">
+          ${dims.slice(0, 3).map((d, i) => `<div class="dial">
+            <canvas id="lay-b3-${i}"></canvas>
+            <div class="muted">${esc(d.name)}${d.band ? ' · ' + esc(d.band) : ''}</div></div>`).join('')}</div>`,
+      draw(){
+        dims.slice(0, 3).forEach((d, i) => {
+          drawArcGauge(`lay-b3-${i}`, d.percent || 0, String(d.score ?? ''), d.band || '',
+                       ['#8b6bb1', '#7fbfa8', '#e2a25f'][i % 3]);
+        });
+      },
+    };
+  },
+
+  chat(res){
+    const c = res.card || {};
+    const type = res.type || {};
+    const lines = c.lines || [];
+    const me = (res.art || {}).thumb || '';
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.chat)}</div>
+        <div class="laywrap"><div class="chatmock">
+          <div class="bar">${esc((CUR && CUR.name) || '群聊')} · 3 人</div>
+          <div class="body">
+            <div class="t">今天 23:41</div>
+            <div class="msg"><img class="ava" src="art/sticker/think.webp" alt="">
+              <span class="txt">有人在吗，群里怎么又安静了</span></div>
+            <div class="msg me"><span class="txt">${esc(lines[0] || '在的，刚看完你们聊的。')}</span>
+              ${me ? `<img class="ava" src="${esc(me)}" alt="">` : ''}</div>
+            <div class="pat">你拍了拍「${esc(type.name || '自己')}」</div>
+            <div class="msg"><img class="ava" src="art/sticker/laugh.webp" alt="">
+              <span class="txt">笑死，这很${esc(type.name || '你')}</span></div>
+            <div class="msg me"><span class="txt">${esc((c.lines || [])[1] || '别夸了，会飘。')}</span>
+              <img class="ava" src="art/sticker/wink.webp" alt=""></div>
+          </div>
+        </div></div>`,
+      why: {
+        title: '你在群里的样子',
+        html: (lines.length ? lines : [type.summary || '']).map((line) => `
+          <div class="framebox"><div class="fb-tip">${esc(line)}</div></div>`).join('') +
+          (c.pit ? `<div class="notice bad">要留意：${esc(c.pit)}</div>` : ''),
+      },
+    };
+  },
+
+  badge(res){
+    const c = res.card || {};
+    const type = res.type || {};
+    const stats = (res.dims || []).slice(0, 3);
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.badge)}</div>
+        <div class="laywrap"><div class="tcg ${c.rare === '稀有' ? 'epic' : ''}">
+          <div class="top"><span>NO.${String((CUR && CUR.id) || '').slice(0, 3).toUpperCase()}</span>
+            <span>${esc(c.rare || '普通')}</span></div>
+          <div class="art"><span class="ring"></span>${(res.art || {}).img
+            ? `<img class="big" src="${esc(res.art.img)}" alt="">`
+            : `<span class="big">${esc((res.art || {}).emoji || '🐷')}</span>`}</div>
+          <h4>${esc(type.name || '')}</h4>
+          <div class="sub">${esc(c.tag || '')}</div>
+          <div class="stats">${stats.map((d) => `<div class="s"><span>${esc(d.name)}</span>
+            <i><b style="width:${d.percent}%"></b></i></div>`).join('')}</div>
+          <div class="stamp">${esc((c.rare || '普通')).slice(0, 2)}<br>VERIFIED</div>
+        </div></div>`,
+    };
+  },
+
+  cup(res){
+    const c = res.card || {};
+    const type = res.type || {};
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.cup)}</div>
+        <div class="laywrap"><div class="cupwrap"><div class="cup">
+          <i class="straw"></i><div class="lid"></div>
+          <div class="body"><div class="liquid"></div><div class="milk"></div>
+            <div class="pearls"></div><div class="gloss"></div></div>
+          <div class="tag">${esc(type.name || '')}</div>
+          ${(res.art || {}).thumb ? `<img class="cupstamp" src="${esc(res.art.thumb)}" alt="">` : ''}
+        </div></div></div>
+        <div class="notice" style="margin-top:2px">${esc(c.tag || type.summary || '')}</div>`,
+      why: {
+        title: '这杯是怎么配出来的',
+        html: (c.lines || []).map((line) => `<div class="framebox"><div class="fb-tip">${esc(line)}</div></div>`).join('') +
+          (c.pit ? `<div class="notice bad">要留意：${esc(c.pit)}</div>` : ''),
+      },
+    };
+  },
+
+  idcard(res){
+    const c = res.card || {};
+    const type = res.type || {};
+    const meta = (SCALES.find((s) => CUR && s.id === CUR.id) || {});
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.idcard)}</div>
+        <div class="laywrap"><div class="idcard">
+          <div class="hole"></div>
+          <div class="avatar">${(res.art || {}).img
+            ? `<img src="${esc(res.art.img)}" alt="">`
+            : esc((res.art || {}).emoji || '💼')}</div>
+          <div class="nm">${esc(type.name || '')}</div>
+          <div class="role">${esc(c.tag || '')}</div>
+          <div class="meta"><span>部门：${esc(meta.category || '—')}</span><span>工号：${String(Date.now()).slice(-4)}</span></div>
+          <div class="barcode"></div>
+          <div class="code">${String((CUR && CUR.id) || 'NEKO').toUpperCase()}</div>
+        </div></div>`,
+      why: {
+        title: '岗位画像',
+        html: (c.lines || []).map((line) => `<div class="framebox"><div class="fb-tip">${esc(line)}</div></div>`).join('') +
+          (c.pit ? `<div class="notice bad">要留意：${esc(c.pit)}</div>` : ''),
+      },
+    };
+  },
+
+  crest(res){
+    const c = res.card || {};
+    const type = res.type || {};
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.crest)}</div>
+        <div class="crestwrap"><div class="crest">
+          <div class="shield"><span class="ring"></span><span class="em">${esc((res.art || {}).emoji || '🏰')}</span></div>
+          <div class="band">${esc(type.name || '')}</div>
+        </div></div>
+        <div class="notice good" style="margin-top:2px"><b>${esc(type.name || '')}</b>｜${esc(c.tag || type.summary || '')}</div>`,
+      why: {
+        title: '分院依据',
+        html: (c.lines || []).map((line) => `<div class="framebox"><div class="fb-tip">${esc(line)}</div></div>`).join('') +
+          (c.pit ? `<div class="notice bad">要留意：${esc(c.pit)}</div>` : ''),
+      },
+    };
+  },
+
+  animal(res){
+    const c = res.card || {};
+    const type = res.type || {};
+    const stats = (res.dims || []).slice(0, 3);
+    const sid = String((CUR && CUR.id) || 'neko');
+    const no = String(1 + (sid.split('').reduce((a, ch) => a + ch.charCodeAt(0), 0) * 7) % 999).padStart(3, '0');
+    return {
+      html: `<div class="hintline">${esc(LAYOUT_HINT.animal)}</div>
+        <div class="laywrap"><div class="dex">
+          <div class="head"><span>No.${no}</span>
+            <span>${esc(c.rare || '常见')}</span></div>
+          <div class="pic"><span class="ring"></span>${(res.art || {}).img
+            ? `<img class="big" src="${esc(res.art.img)}" alt="">`
+            : `<span class="big">${esc((res.art || {}).emoji || '🐾')}</span>`}
+            <span class="shadow"></span></div>
+          <div class="nm">${esc(type.name || '')}</div>
+          <div class="lat">${esc(c.tag || '')}</div>
+          <div class="attrs">${stats.map((d) => `<div class="a"><span>${esc(d.name)}</span>
+            <i><b style="width:${d.percent}%"></b></i><em>${d.percent}</em></div>`).join('')}</div>
+        </div></div>`,
+      why: {
+        title: '图鉴说明',
+        html: (c.lines || []).map((line) => `<div class="framebox"><div class="fb-tip">${esc(line)}</div></div>`).join('') +
+          (c.pit ? `<div class="notice bad">要留意：${esc(c.pit)}</div>` : ''),
+      },
+    };
+  },
+};
+
 function renderResult(res){
   const type = res.type || {};
   const kind = res.kind || CUR.kind;
   const dims = res.dims || [];
   // 雷达图只给 Likert 多维度量表；强迫选择量表（爱的语言/霍兰德）用占比条更诚实
-  const useRadar = kind === 'dimension' && dims.length >= 3;
+  // 维度太多（24 项优势）时雷达会糊成一团，改成条形 + 折叠
+  // 版式自己带了主图（九型轮盘/六边形/四象限/环图/刻度/电量…）就不再叠雷达
+  const ownsChart = ['quadrant4', 'battery', 'wheel9', 'hexagon', 'quadrant', 'donut',
+    'clock', 'bands', 'bands3', 'duo', 'gauge', 'chat', 'badge', 'cup', 'idcard',
+    'crest', 'animal', 'rank', 'facet'].includes(res.layout || 'radar');
+  const useRadar = kind === 'dimension' && dims.length >= 3 && dims.length <= 8 && !ownsChart;
+
+  // ── 一测一 UI：按后端给的 layout 渲染专属版式 ──────────────
+  const layoutKey = res.layout || 'radar';
+  const layFn = LAYOUTS[layoutKey] || LAYOUTS.radar;
+  let lay = {};
+  try { lay = layFn(res) || {}; } catch (err) { lay = {}; }
+  $('layout-box').innerHTML = lay.html || '';
+  if (lay.draw){ try { lay.draw(); } catch (err) { /* 画不出来也不该整页挂掉 */ } }
+  // 趣味类的结果自带「物件」（卡牌/杯子/工牌/院徽/图鉴/群聊），不要再叠一张 emoji 横幅
+  const objectLayout = ['chat', 'badge', 'cup', 'idcard', 'crest', 'animal'].includes(layoutKey);
+  $('hero-art').classList.toggle('hidden', objectLayout);
+  // 物件版式把「类型名 + 一句话」放到物件下面，避免同一段信息出现两次
+  if (objectLayout){
+    $('result-hero').classList.add('hidden');
+    $('layout-box').innerHTML += `<div style="text-align:center;margin:10px 0 2px">
+      <div class="muted">${esc(CUR.name)} · ${esc(type.name || '')}</div>
+      <div class="fb-tip" style="margin-top:4px">${esc(type.summary || '')}</div></div>`;
+  } else {
+    $('result-hero').classList.remove('hidden');
+  }
 
   // ── 顶部：类型/名称 + 一句话 + 来源信息 ────────────────────
-  const codeText = (type.code && type.code !== type.name) ? type.code : '';
+  //   筛查量表没有「类型」，就把分级当标题（大号字），总分当代码位
+  const bandLayout = ['bands', 'bands3'].includes(layoutKey);
+  let prettyName = String(type.name || '').replace(/^你的主要倾向：/, '');
+  // 霍兰德：标题用前三类名字，把「RIA」留给代码位，避免同一行重复
+  if (layoutKey === 'hexagon' && /^兴趣码/.test(prettyName)){
+    prettyName = (res.dims || []).slice(0, 3).map((d) => d.name).filter(Boolean).join(' · ') || prettyName;
+  }
+  const useLevelTitle = bandLayout && !prettyName && res.level;
+  const codeText = useLevelTitle ? String(res.total ?? '')
+    : ((type.code && type.code !== type.name) ? type.code : '');
   $('r-code').textContent = codeText;
+  if (/^\d{1,4}$/.test(codeText)) countUp($('r-code'), codeText);
   $('r-code').classList.toggle('hidden', !codeText);
-  $('r-name').textContent = type.name || res.name || '';
-  $('r-sum').textContent = type.summary || res.advice || '';
+  $('r-name').textContent = useLevelTitle ? res.level : (prettyName || res.name || '');
+  $('r-sum').textContent = useLevelTitle ? (res.advice || '')
+    : (type.summary || res.advice || (CUR && CUR.intro) || '');
   const bankInfo = res.bank_size
     ? `本次 ${res.items_used || CUR.items.length} 题 / 题库 ${res.bank_size} 题`
     : `${CUR.items.length} 题`;
   $('r-meta').textContent = `${CUR.name} · ${bankInfo} · 来源：${CUR.source}`;
 
-  // 配图：按结果类型换 emoji 与配色（emoji + 渐变，不引外部图）
+  // 配图：用狐狐插画（没有图时才退回 emoji + 渐变）
   const art = res.art || {};
   const banner = $('hero-art');
   banner.style.setProperty('--art-a', art.from || '#8d7ff3');
   banner.style.setProperty('--art-b', art.to || '#5ec8f0');
+  $('result-hero').style.setProperty('--halo', (art.from || '#8d7ff3') + '55');
   $('hero-emoji').textContent = art.emoji || '🧩';
+  const heroImg = $('hero-img');
+  if (art.img){
+    heroImg.src = art.img;
+    banner.classList.add('hasimg');
+  } else {
+    heroImg.removeAttribute('src');
+    banner.classList.remove('hasimg');
+  }
 
   // ── 为什么是这个结果 ───────────────────────────────────────
   const cands = res.candidates || [];
-  if (kind === 'type' && cands.length){
+  const axes = res.axes || [];
+  if (axes.length){
+    // 16personalities 那种双极轴：不只看选了哪个字母，还看偏向有多强
+    $('why-title').textContent = '四条轴：你各偏了多少';
+    $('why-box').innerHTML = axes.map((a) => {
+      const lp = Number(a.left.percent) || 0;
+      const rp = Number(a.right.percent) || 0;
+      const leftWin = lp >= rp;
+      const w = Math.abs(lp - 50);            // 只画「超出中点」的那一段
+      return `<div class="axis">
+        <div class="axis-top">
+          <div class="side ${leftWin ? 'win' : ''}"><span>${esc(a.left.name)}</span><span class="pc">${lp}%</span></div>
+          <div class="side right ${leftWin ? '' : 'win'}"><span class="pc">${rp}%</span><span>${esc(a.right.name)}</span></div>
+        </div>
+        <div class="axis-track">
+          <i class="l ${leftWin ? '' : 'mute'}" style="width:${leftWin ? w : 0}%"></i>
+          <i class="r ${leftWin ? 'mute' : ''}" style="width:${leftWin ? 0 : w}%"></i>
+          <b class="mid"></b>
+        </div>
+        <div class="axis-note">${esc(a.name || '')}${a.strength <= 6
+          ? '<span class="axis-pill">几乎各占一半，两种状态你都会用</span>'
+          : (a.strength >= 30 ? '<span class="axis-pill">偏向明显</span>' : '')}</div>
+      </div>`;
+    }).join('') + `<div class="notice" style="margin-top:2px">这是 OEJTS 四组二分，不代表 MBTI 官方结果；
+      条只画「超出中点的那一段」，所以 56% 是轻微偏向、90% 是几乎一边倒，不是从左边量的进度。</div>`;
+  } else if (kind === 'type' && cands.length){
     const max = Math.max(...cands.map((c) => c.percent), 1);
     $('why-title').textContent = '你的各项占比（为什么是这个结果）';
     let html = cands.slice(0, 9).map((c, i) => `
@@ -1542,29 +3040,44 @@ function renderResult(res){
     </div>`;
   } else if (dims.length){
     const labels = new Map((CUR.dimensions || []).map((d) => [d.key, d]));
-    $('why-title').textContent = '各维度得分';
-    $('why-box').innerHTML = dims.map((d) => {
+    const row = (d) => {
       const meta = labels.get(d.key) || {};
       const name = d.name || meta.name || d.key;
       const isShare = d.percent_kind === 'share';
-      const band = isShare ? '占你选择的比例'
-        : (d.percent >= 66 ? (meta.high || '偏高') : (d.percent <= 33 ? (meta.low || '偏低') : '中间地带'));
+      const bandText = d.band || (isShare ? '占你选择的比例'
+        : (d.percent >= 66 ? (meta.high || '偏高') : (d.percent <= 33 ? (meta.low || '偏低') : '中间地带')));
       return `<div class="framebox">
         <div class="fb-top">
           <span class="fb-name">${esc(name)}</span>
-          <span class="fb-val">${d.percent}%${isShare ? ' · ' + esc(band) : ' · ' + esc(band)}</span>
+          <span class="fb-val">${d.percent}% · ${esc(bandText)}</span>
         </div>
         <div class="track"><i style="width:${d.percent}%"></i></div>
-        ${(d.tip || meta.tip) ? `<div class="fb-tip">${esc(d.tip || meta.tip)}</div>` : ''}
+        ${(d.band_advice || d.tip || meta.tip) ? `<div class="fb-tip">${esc(d.band_advice || d.tip || meta.tip)}</div>` : ''}
       </div>`;
-    }).join('');
+    };
+    // 维度太多（24 项优势）时先给前 8 名，其余折叠——一屏全铺没人看得完
+    const many = dims.length > 10;
+    $('why-title').textContent = many ? '全部维度（按分数排序）' : '各维度得分';
+    if (many){
+      $('why-box').innerHTML = dims.slice(0, 8).map(row).join('') +
+        `<details class="howto"><summary>展开其余 ${dims.length - 8} 个维度</summary>
+          <div style="margin-top:8px">${dims.slice(8).map(row).join('')}</div></details>`;
+    } else {
+      $('why-box').innerHTML = dims.map(row).join('');
+    }
   } else {
     $('why-title').textContent = '得分';
     $('why-box').innerHTML = '';
   }
 
+  // 版式自己带了「怎么读」，就覆盖默认的维度条（如九型/霍兰德/依恋）
+  if (lay.why && lay.why.html){
+    $('why-title').textContent = lay.why.title || '怎么看';
+    $('why-box').innerHTML = lay.why.html;
+  }
+
   // ── 长处 / 盲点 / 分级建议 ─────────────────────────────────
-  let extra = '';
+  let extra = lay.extra || '';
   if (type.strengths || type.blind_spot){
     extra += `<div class="two" style="margin-top:12px">
       ${type.strengths ? `<div class="card" style="box-shadow:none;background:rgba(233,250,241,.6);padding:12px 15px">
@@ -1578,8 +3091,51 @@ function renderResult(res){
       分数只表示你在这批陈述上的同意程度，不套用官方分级。</div>`;
   }
   if (res.level){
-    extra += `<div class="notice ${res.total >= 10 ? 'bad' : ''}" style="margin-top:12px">
+    // 红色只给「该去医院/该找人」的那几档，别让「中等压力」也变警报
+    const badLevel = /重度|偏重|偏高|高压力|达到筛查线|低于筛查线|偏低|很不满|不满意/.test(String(res.level));
+    extra += `<div class="notice ${badLevel ? 'bad' : ''}" style="margin-top:12px">
       分级：<b>${esc(res.level)}</b>（总分 ${res.total}）｜${esc(res.advice || '')}</div>`;
+  }
+  // ── 分面（大五 30 面这类）──────────────────────────────────
+  const facets = res.facets || [];
+  if (facets.length){
+    const dimName = new Map((CUR.dimensions || []).map((d) => [d.key, d.name]));
+    const groups = new Map();
+    facets.forEach((f) => {
+      const key = f.dim || '';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(f);
+    });
+    let body = '';
+    for (const [dimKey, list] of groups){
+      const sorted = list.slice().sort((a, b) => b.percent - a.percent);
+      body += `<div class="fgrp"><div class="cap">${esc(dimName.get(dimKey) || dimKey || '分面')}</div>
+        <div class="facet-grid">${sorted.map((f) => `
+          <div class="frow ${f.band === 'high' ? 'hot' : ''}">
+            <span class="fn" title="${esc(f.desc || '')}">${esc(f.name)}</span>
+            <span class="ft"><i style="width:${f.percent}%"></i></span>
+            <span class="fp">${f.percent}%</span>
+          </div>`).join('')}</div></div>`;
+    }
+    extra += `<div class="hr"></div>
+      <details class="howto" open><summary>${facets.length} 个分面明细（同一大维度里细看）</summary>
+        <div class="fb-tip" style="margin:6px 0 2px">大维度给你轮廓，分面告诉你轮廓是哪几块撑起来的。最高的那几项通常就是你日常最省力、也最容易过度使用的部分。</div>
+        ${body}
+      </details>`;
+  }
+  // ── 和上一次比 ─────────────────────────────────────────────
+  const cmp = res.compare || {};
+  if (cmp.available && (cmp.dims || []).length){
+    const worseUp = (res.direction || '') === 'negative';
+    const chips = (cmp.dims || []).slice(0, 6).map((d) => {
+      const arrow = d.delta > 0 ? '↑' : (d.delta < 0 ? '↓' : '→');
+      const good = d.delta === 0 ? 'flat' : ((d.delta > 0) !== worseUp ? 'up' : 'down');
+      return `<span class="delta ${good}">${esc(d.name)} <b>${arrow}${Math.abs(d.delta)}%</b></span>`;
+    }).join('');
+    extra += `<div class="hr"></div><div class="sec-h" style="margin-top:0">和上一次比</div>
+      <div class="muted">上一次是 ${esc(cmp.time || '—')}${cmp.days ? `（${cmp.days} 天前）` : ''}${cmp.level_before ? ` · 当时分级 ${esc(cmp.level_before)}` : ''}${cmp.type_before ? ` · 当时类型 ${esc(cmp.type_before)}` : ''}</div>
+      <div class="deltas">${chips}</div>
+      <div class="fb-tip">${cmp.days >= 30 ? '隔了一个月以上，变化里既有真实波动，也可能只是题库随机抽题不同——别把一个箭头当结论。' : '同一份量表隔几周再做，比分差更值得看的是「哪几项一直在动」。'}</div>`;
   }
   // 维度长文解读
   const notes = res.notes || [];
@@ -1616,6 +3172,8 @@ function renderResult(res){
   // ── 剖面图：只有多维量表才画 ──────────────────────────────
   $('radar-block').classList.toggle('hidden', !useRadar);
   if (useRadar) drawRadar(dims);
+  // 条形从 0 长出来（节奏感；低动效偏好下 CSS 会关掉过渡）
+  animateBars($('view-result'));
 }
 
 function drawRadar(dims){
@@ -1700,8 +3258,22 @@ $('btn-copy').onclick = async () => {
   const res = LAST || {};
   const type = res.type || {};
   const lines = [`${res.name}`, `结果：${type.name || ''}${type.code ? `（${type.code}）` : ''}`,
-    type.summary || '', '', ...(res.dims || []).map((d) => `${d.key}: ${d.percent}%`)];
+    type.summary || '', ''];
+  if ((res.axes || []).length){
+    (res.axes || []).forEach((a) => lines.push(`${a.name}：${a.left.name} ${a.left.percent}% ／ ${a.right.name} ${a.right.percent}%`));
+    lines.push('');
+  }
+  lines.push(...(res.dims || []).map((d) => `${d.name || d.key}: ${d.percent}%${d.band ? ' · ' + d.band : ''}`));
+  if ((res.facets || []).length){
+    lines.push('', '分面前五：');
+    lines.push(...(res.facets || []).slice(0, 5).map((f) => `  ${f.name}: ${f.percent}%`));
+  }
   if (res.level) lines.push('', `等级：${res.level}（总分 ${res.total}）`);
+  if ((res.compare || {}).available){
+    const c = res.compare;
+    lines.push('', `与上次（${c.time}）相比：` +
+      (c.dims || []).slice(0, 4).map((d) => `${d.name} ${d.delta > 0 ? '+' : ''}${d.delta}%`).join('，'));
+  }
   lines.push('', '（本结果仅供自我了解，不构成医学诊断）');
   const text = lines.filter(Boolean).join('\n');
   try { await navigator.clipboard.writeText(text); floatText('已复制'); }
@@ -1710,6 +3282,8 @@ $('btn-copy').onclick = async () => {
 $('btn-card').onclick = async () => {
   const res = LAST || {};
   const type = res.type || {};
+  const art = res.art || {};
+  const photo = await loadArt(art.img);
   const canvas = document.createElement('canvas');
   canvas.width = 1000;
   canvas.height = 560;
@@ -1719,14 +3293,33 @@ $('btn-card').onclick = async () => {
   grad.addColorStop(1, '#eaf2ff');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 1000, 560);
-  const art = res.art || {};
   const band = ctx.createLinearGradient(0, 0, 1000, 0);
   band.addColorStop(0, art.from || '#8d7ff3');
   band.addColorStop(1, art.to || '#5ec8f0');
   ctx.fillStyle = band;
   ctx.fillRect(0, 0, 1000, 12);
-  ctx.font = '64px system-ui, "Segoe UI Emoji"';
-  ctx.fillText(art.emoji || '🧩', 860, 150);
+  if (photo){
+    // 右侧竖版插画：圆角裁切 + 白边
+    ctx.save();
+    const px = 726, py = 62, pw = 224, ph = 300, r = 22;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, r);
+    else ctx.rect(px, py, pw, ph);
+    ctx.clip();
+    const ratio = Math.max(pw / photo.width, ph / photo.height);
+    const dw = photo.width * ratio, dh = photo.height * ratio;
+    ctx.drawImage(photo, px + (pw - dw) / 2, py + (ph - dh) * 0.18, dw, dh);
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,.9)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, r);
+    else ctx.rect(px, py, pw, ph);
+    ctx.stroke();
+  } else {
+    ctx.font = '64px system-ui, "Segoe UI Emoji"';
+    ctx.fillText(art.emoji || '🧩', 860, 150);
+  }
   ctx.fillStyle = '#6d5ce0';
   ctx.font = '600 26px system-ui, "Microsoft YaHei"';
   ctx.fillText(res.name || '', 60, 74);
@@ -1866,6 +3459,51 @@ document.querySelectorAll('.tab').forEach((tab) => {
     if (tab.dataset.tab === 'home') loadScales();     // 手动回量表库时再探一次连接
   });
 });
+
+// ── 综合画像 ─────────────────────────────────────────────────
+let REPORT_TEXT = '';
+async function loadReport(){
+  const body = $('report-body');
+  const meta = $('report-meta');
+  if (!body) return;
+  body.innerHTML = '<div class="card"><div class="muted">正在汇总…</div></div>';
+  try {
+    const res = await api('/api/report', {});
+    if (!res.ok){ body.innerHTML = `<div class="card">${esc(res.error || '生成失败')}</div>`; return; }
+    if (res.empty){
+      REPORT_TEXT = '';
+      meta.textContent = '';
+      body.innerHTML = `<div class="card">
+        <img class="stk" src="art/sticker/ask.webp" alt="">
+        <div class="muted" style="text-align:center">${esc(res.hint || '还没有任何记录。')}</div>
+        <div class="row" style="margin-top:10px;justify-content:center"><button data-home="1">去量表库</button></div></div>`;
+      const go2 = body.querySelector('[data-home]');
+      if (go2) go2.onclick = () => go('home');
+      return;
+    }
+    REPORT_TEXT = res.text || '';
+    meta.textContent = `已纳入 ${res.counts.done} / ${res.counts.scales} 份量表的最近一次结果`;
+    body.innerHTML = (res.sections || []).map((sec) => `
+      <div class="report-sec">
+        <h3>${esc(sec.title)}</h3>
+        <ul>${(sec.lines || []).map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
+      </div>`).join('') +
+      `<div class="card"><div class="muted">这份画像是把你自己各份量表的最近一次结果拼在一起的，
+       不是新的测量，也不构成诊断。想更准，就把还没做的量表补上。</div>
+        <details class="howto" style="margin-top:10px"><summary>纯文本版（可直接粘给猫娘）</summary>
+          <pre style="white-space:pre-wrap;font-family:var(--font-body);font-size:var(--fs-sm);color:var(--ink2);margin:8px 0 0">${esc(REPORT_TEXT)}</pre>
+        </details>
+      </div>`;
+  } catch (err) {
+    body.innerHTML = `<div class="card">${esc(String(err))}</div>`;
+  }
+}
+$('btn-report').onclick = loadReport;
+$('btn-report-copy').onclick = async () => {
+  if (!REPORT_TEXT){ floatText('先点生成'); return; }
+  try { await navigator.clipboard.writeText(REPORT_TEXT); floatText('画像已复制'); }
+  catch (err) { floatText('复制失败，请在下面纯文本里手动选'); }
+};
 
 // ── 猫娘塔罗 ────────────────────────────────────────────────
 let TAROT_SPREADS = [];

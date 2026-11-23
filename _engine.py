@@ -10,7 +10,19 @@ from __future__ import annotations
 from typing import Any
 
 from ._bank import DIM_DETAIL
-from ._scales import CRISIS_LINES, art_for, get_scale, profile_for
+from ._scales import CRISIS_LINES, ENNEA_META, PRO_DIM_DETAIL, art_for, get_scale, profile_for
+
+
+def _band_for(value: float, bands: list) -> tuple[str, str] | tuple[None, None]:
+    """按切点表取分级：(低, 高, 标签, 建议)。切点用百分比。"""
+    for band in bands or []:
+        try:
+            low, high, label, advice = band
+        except Exception:
+            continue
+        if low <= value <= high:
+            return label, advice
+    return None, None
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -45,6 +57,9 @@ def score(scale_id: str, answers: list, items: list | None = None, official: boo
 
     dim_scores: dict[str, float] = {}
     dim_max: dict[str, float] = {}
+    # 分面（facet）：大五 30 面这类「大维度下再分小面」的量表用
+    facet_scores: dict[str, float] = {}
+    facet_max: dict[str, float] = {}
     raw_sum = 0
     risk = False
 
@@ -60,6 +75,10 @@ def score(scale_id: str, answers: list, items: list | None = None, official: boo
             key = item.get("dim", "score")
             dim_scores[key] = dim_scores.get(key, 0) + raw
             dim_max[key] = dim_max.get(key, 0) + max_value
+            facet_key = item.get("facet")
+            if facet_key:
+                facet_scores[facet_key] = facet_scores.get(facet_key, 0) + raw
+                facet_max[facet_key] = facet_max.get(facet_key, 0) + max_value
             raw_sum += raw
             if item.get("risk") and _safe_int(value, 0) > 0:
                 risk = True
@@ -114,6 +133,11 @@ def score(scale_id: str, answers: list, items: list | None = None, official: boo
         "total": round(raw_sum, 2),
         "dims": dims_out,
         "risk": risk,
+        # 方向语义：negative = 分越高越糟（压力/失眠那类），前端据此决定箭头颜色
+        "direction": scale.get("direction", ""),
+        # 刻度盘版式要用：分级带与满分
+        "bands": scale.get("bands") or [],
+        "max_total": max_value * len(items) if scale.get("options") else None,
     }
 
     # ③.5 候选排行：类型类量表把每个候选的中文名/说明/百分比都带上，
@@ -137,6 +161,74 @@ def score(scale_id: str, answers: list, items: list | None = None, official: boo
                 d["name"] = meta.get("name", d["key"])
                 d["tip"] = meta.get("tip", "")
 
+    # ③.6 双极轴：类型量表每对二分给一条「左 62% / 右 38%」的轴
+    #      （16personalities 那种条：不是只看选了哪个字母，还看偏向有多强）
+    if scale.get("dichotomies"):
+        dim_meta = {d["key"]: d for d in (scale.get("dimensions") or [])}
+        axes = []
+        for pair in scale["dichotomies"]:
+            left_key, right_key = pair["left"], pair["right"]
+            left_val = float(dim_scores.get(left_key, 0))
+            right_val = float(dim_scores.get(right_key, 0))
+            total = left_val + right_val
+            left_pct = round(left_val / total * 100) if total else 50
+            right_pct = 100 - left_pct
+            axes.append({
+                "key": pair.get("key", left_key + right_key),
+                "name": pair.get("name", ""),
+                "left": {
+                    "key": left_key,
+                    "name": dim_meta.get(left_key, {}).get("name", left_key),
+                    "tip": dim_meta.get(left_key, {}).get("tip", ""),
+                    "percent": left_pct,
+                },
+                "right": {
+                    "key": right_key,
+                    "name": dim_meta.get(right_key, {}).get("name", right_key),
+                    "tip": dim_meta.get(right_key, {}).get("tip", ""),
+                    "percent": right_pct,
+                },
+                # strength：离 50% 有多远（0 = 完全左右各半，50 = 一边倒）
+                "strength": abs(left_pct - 50),
+            })
+        result["axes"] = axes
+
+    # ③.7 分面：大五 30 面这类量表，把 30 个 facet 的百分比单独列出来
+    facets_meta = scale.get("facets") or []
+    if facets_meta and facet_scores:
+        meta_map = {f["key"]: f for f in facets_meta}
+        facet_rows = []
+        for key, value in facet_scores.items():
+            ceiling = facet_max.get(key, 0) or 1
+            info = meta_map.get(key, {})
+            percent = round(max(0.0, min(1.0, float(value) / ceiling)) * 100)
+            facet_rows.append({
+                "key": key,
+                "name": info.get("name", key),
+                "dim": info.get("dim", ""),
+                "desc": info.get("desc", ""),
+                "score": round(value, 2),
+                "percent": percent,
+                "band": "high" if percent >= 60 else ("low" if percent <= 40 else "mid"),
+            })
+        facet_rows.sort(key=lambda d: -d["percent"])
+        result["facets"] = facet_rows
+
+    # ③.8 维度分级：scale["dim_bands"] 里给每个维度自己的切点
+    #      默认按百分比切；DASS-21 这类原量表切点是「原始分」，用 dim_bands_on="score" 指定
+    dim_bands = scale.get("dim_bands") or {}
+    dim_band_basis = scale.get("dim_bands_on", "percent")
+    if dim_bands:
+        for dim in dims_out:
+            bands = dim_bands.get(dim["key"])
+            if not bands:
+                continue
+            basis_value = dim["score"] if dim_band_basis == "score" else dim["percent"]
+            label, advice = _band_for(basis_value, bands)
+            if label:
+                dim["band"] = label
+                dim["band_advice"] = advice
+
     # ④ 类型判定
     kind = scale.get("kind")
     if kind == "type" and scale.get("dichotomies"):
@@ -147,23 +239,43 @@ def score(scale_id: str, answers: list, items: list | None = None, official: boo
             code += pair["left"] if left >= right else pair["right"]
         result["type"] = profile_for(code, scale_id)
 
-        # 依恋：用焦虑/回避两轴定四型
+        # 依恋：用焦虑/回避两轴定四型（v1.2.0 起是 12 题两轴版）
         if scale_id == "attachment":
-            anxious = dim_scores.get("anxious", 0)
-            avoidant = dim_scores.get("avoidant", 0)
-            secure = dim_scores.get("secure", 0)
-            if anxious >= avoidant and anxious > 0 and (anxious >= secure):
-                code = "anxious"
-            elif avoidant > 0 and avoidant >= secure:
-                code = "avoidant"
-            elif anxious > 0 and avoidant > 0:
+            high_anx = round(float(dim_scores.get("anxious", 0)) /
+                             (dim_max.get("anxious") or 1) * 100) >= 55
+            high_avo = round(float(dim_scores.get("avoidant", 0)) /
+                             (dim_max.get("avoidant") or 1) * 100) >= 55
+            result["type"] = profile_for(
+                "fearful" if high_anx and high_avo else
+                ("anxious" if high_anx else ("avoidant" if high_avo else "secure")),
+                "attachment",
+            )
+            # 展示用：不把内部英文键（secure/anxious…）顶在标题上
+            if isinstance(result.get("type"), dict):
+                result["type"]["code"] = ""
+    elif kind == "type":
+        top = dims_out[0]["key"] if dims_out else ""
+        if scale_id == "attachment" and "anxious" in dim_scores and "avoidant" in dim_scores:
+            anxious_pct = round(float(dim_scores.get("anxious", 0)) /
+                                (dim_max.get("anxious") or 1) * 100)
+            avoidant_pct = round(float(dim_scores.get("avoidant", 0)) /
+                                 (dim_max.get("avoidant") or 1) * 100)
+            high_anx = anxious_pct >= 55
+            high_avo = avoidant_pct >= 55
+            if high_anx and high_avo:
                 code = "fearful"
+            elif high_anx:
+                code = "anxious"
+            elif high_avo:
+                code = "avoidant"
             else:
                 code = "secure"
             result["type"] = profile_for(code, "attachment")
-    elif kind == "type":
-        top = dims_out[0]["key"] if dims_out else ""
-        result["type"] = profile_for(top, scale_id)
+            result["quadrant"] = {"x": anxious_pct, "y": avoidant_pct, "code": code}
+            # 展示用：不把内部英文键（secure/anxious…）顶在标题上
+            result["type"]["code"] = ""
+        else:
+            result["type"] = profile_for(top, scale_id)
     elif kind == "dimension_type":
         picked = [d for d in dims_out if d["score"] > 0]
         top = picked[0] if picked else None
@@ -182,14 +294,30 @@ def score(scale_id: str, answers: list, items: list | None = None, official: boo
 
     # ④.5 配图：类型结果用该类型的 emoji，维度量表用主视觉
     top_key = ""
-    if result.get("type") and isinstance(result["type"], dict):
+    if result.get("ennea"):
+        top_key = str(result["ennea"].get("code") or "")      # t8：配图要用内部键
+    elif result.get("type") and isinstance(result["type"], dict):
         top_key = str(result["type"].get("code") or "")
     if not top_key and dims_out:
         top_key = dims_out[0]["key"]
     result["art"] = art_for(scale_id, top_key)
 
+    # ④.6 一测一 UI：结果页版式 + 卡片文案（趣味量表）+ 九型结构
+    result["layout"] = scale.get("layout", "radar")
+    card_map = scale.get("card_extra") or {}
+    if card_map:
+        result["card"] = card_map.get(top_key) or {}
+    if scale_id == "ennea":
+        meta = ENNEA_META.get(top_key) or {}
+        if meta:
+            result["ennea"] = dict(meta)
+            result["ennea"]["code"] = top_key
+            # 展示用编号：t8 → 8（t8 留给内部维度键）
+            if isinstance(result.get("type"), dict) and top_key.startswith("t"):
+                result["type"]["code"] = top_key[1:]
+
     # ④.8 更丰富的解读：维度长文 + 可执行建议（dimension 类）
-    detail = (DIM_DETAIL.get(scale_id) or {})
+    detail = (DIM_DETAIL.get(scale_id) or PRO_DIM_DETAIL.get(scale_id) or {})
     notes = []
     advices = []
     for dim in dims_out[:2]:

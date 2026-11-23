@@ -100,6 +100,42 @@ def _dedupe_texts(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
 _mark('before-class')
 
 
+def _compare_with_previous(result: dict, prev: Optional[dict]) -> dict:
+    """本次结果 vs 同一量表上一次：只报变化最大的几个维度，别塞一堆 0。"""
+    if not prev:
+        return {"available": False}
+    now_dims = {str(d.get("key")): d for d in (result.get("dims") or []) if d.get("key")}
+    old_dims = {str(d.get("key")): d for d in (prev.get("dims") or []) if d.get("key")}
+    rows = []
+    for key, now in now_dims.items():
+        old = old_dims.get(key)
+        if not old:
+            continue
+        now_pct = int(now.get("percent") or 0)
+        old_pct = int(old.get("percent") or 0)
+        rows.append({
+            "key": key,
+            "name": now.get("name") or key,
+            "now": now_pct,
+            "before": old_pct,
+            "delta": now_pct - old_pct,
+        })
+    rows.sort(key=lambda row: -abs(row["delta"]))
+    prev_ts = int(prev.get("ts") or 0)
+    days = max(0, int((time.time() - prev_ts) // 86400)) if prev_ts else 0
+    prev_type = prev.get("type")
+    return {
+        "available": True,
+        "time": prev.get("time", ""),
+        "days": days,
+        "total_before": prev.get("total"),
+        "total_now": result.get("total"),
+        "level_before": prev.get("level"),
+        "type_before": (prev_type or {}).get("name") if isinstance(prev_type, dict) else str(prev_type or ""),
+        "dims": [row for row in rows if row["delta"]] or rows[:3],
+    }
+
+
 @neko_plugin
 class AssessmentPlugin(NekoPluginBase):
     _mark('class-enter')
@@ -238,6 +274,9 @@ class AssessmentPlugin(NekoPluginBase):
             ("POST", "/api/game"): self._api_game,
             ("GET", "/api/compat"): self._api_compat,
             ("POST", "/api/compat"): self._api_compat,
+            ("POST", "/api/pin"): self._api_pin,
+            ("GET", "/api/report"): self._api_report,
+            ("POST", "/api/report"): self._api_report,
         }
         port = find_open_port(self._panel_port)
         server = PanelServer(
@@ -259,8 +298,41 @@ class AssessmentPlugin(NekoPluginBase):
             self.logger.warning("[assessment] 面板启动失败")
 
     # ── 接口 ─────────────────────────────────────────────────
+    def _pinned(self) -> list:
+        raw = self._prefs if isinstance(self._prefs, dict) else {}
+        pins = raw.get("pinned")
+        if not isinstance(pins, list):
+            return []
+        return [str(x)[:40] for x in pins][:24]
+
+    def _api_pin(self, body: dict) -> dict:
+        """收藏/取消收藏：收藏的量表在首页置顶。"""
+        scale_id = str((body or {}).get("id") or "").strip()
+        if not scale_id:
+            return {"ok": False, "error": "缺少量表 id"}
+        pins = self._pinned()
+        if scale_id in pins:
+            pins = [x for x in pins if x != scale_id]
+            on = False
+        else:
+            pins = (pins + [scale_id])[-24:]
+            on = True
+        raw = dict(self._prefs) if isinstance(self._prefs, dict) else {}
+        raw["pinned"] = pins
+        self._prefs = raw
+        self._save_prefs(raw)
+        return {"ok": True, "pinned": pins, "on": on}
+
     def _api_scales(self, _body: dict) -> dict:
         counts = self._store.counts() if self._store else {}
+        last_ts: dict[str, int] = {}
+        if self._store:
+            for row in self._store.list():
+                sid = str(row.get("scale_id") or "")
+                ts = int(row.get("ts") or 0)
+                if ts > last_ts.get(sid, 0):
+                    last_ts[sid] = ts
+        pins = self._pinned()
         rows = list_scales()
         for row in rows:
             row["done"] = counts.get(row["id"], 0)
@@ -270,7 +342,14 @@ class AssessmentPlugin(NekoPluginBase):
             row["min_items"] = int(scale.get("min_items") or row["count"])
             row["fixed"] = bool(scale.get("fixed"))
             row["official_count"] = int(scale.get("official_count") or 0)
-        return {"ok": True, "scales": rows, "categories": CATEGORIES}
+            row["facet_count"] = len(scale.get("facets") or [])
+            row["public_domain"] = bool(scale.get("public_domain"))
+            row["license"] = str(scale.get("license") or "")
+            row["pinned"] = row["id"] in pins
+            row["last_ts"] = last_ts.get(row["id"], 0)
+            row["tags"] = list(scale.get("tags") or [])
+            row["cover"] = str(scale.get("cover") or "")
+        return {"ok": True, "scales": rows, "categories": CATEGORIES, "pinned": pins}
 
     def _api_scale(self, body: dict) -> dict:
         """取本次要答的题：从题库里随机抽 count 题（官方量表固定题量，不抽样）。"""
@@ -319,6 +398,12 @@ class AssessmentPlugin(NekoPluginBase):
                 "official_count": official_count,
                 "official": official,
                 "method": scale.get("method", ""),
+                # 分面 / 双极轴 / 维度切点：前端要画 30 面明细与「左 62%」那种轴
+                "facets": scale.get("facets", []),
+                "dim_bands": scale.get("dim_bands", {}),
+                "direction": scale.get("direction", ""),
+                "license": scale.get("license", ""),
+                "public_domain": bool(scale.get("public_domain")),
             },
         }
 
@@ -345,12 +430,19 @@ class AssessmentPlugin(NekoPluginBase):
         if not result.get("ok"):
             return result
         scale = get_scale(scale_id) or {}
+        # 和上一次比：先取旧记录（同一量表最近一次），再写入本次
+        prev = None
+        if self._store:
+            history = self._store.history_for(scale_id)
+            if history:
+                prev = history[-1]
         record = None
         if self._store:
             record = self._store.add(
                 scale_id, scale.get("name", scale_id), scale.get("kind", ""), result, answers
             )
         result["record"] = {k: v for k, v in (record or {}).items() if k != "answers"}
+        result["compare"] = _compare_with_previous(result, prev)
         result["crisis_lines"] = CRISIS_LINES if result.get("risk") else []
         return result
 
@@ -380,6 +472,216 @@ class AssessmentPlugin(NekoPluginBase):
             return {"ok": True, "history": []}
         scale_id = str((body or {}).get("scale_id") or "").strip()
         return {"ok": True, "history": self._store.history_for(scale_id)}
+
+    # ── 综合画像：把各量表最近一次结果拼成一份可读报告 ─────────
+    def _api_report(self, _body: dict) -> dict:
+        rows = self._store.list() if self._store else []
+        latest: dict[str, dict] = {}
+        for row in rows:
+            sid = str(row.get("scale_id") or "")
+            if not sid:
+                continue
+            if sid not in latest or int(row.get("ts") or 0) >= int(latest[sid].get("ts") or 0):
+                latest[sid] = row
+
+        sections: list[dict] = []
+        lines: list[str] = []
+
+        def _scale_name(sid: str) -> str:
+            return (get_scale(sid) or {}).get("name") or (latest.get(sid) or {}).get("name") or sid
+
+        def _dim_list(record: dict, limit: int = 5) -> list[dict]:
+            return sorted(
+                [d for d in (record.get("dims") or []) if d.get("percent") is not None],
+                key=lambda d: -int(d.get("percent") or 0),
+            )[:limit]
+
+        # ① 人格底座
+        persona_lines = []
+        big5 = latest.get("big5") or latest.get("big5f")
+        if big5:
+            top = _dim_list(big5, 3)
+            if top:
+                persona_lines.append(
+                    "大五里最突出的是 " + "、".join(
+                        f"{d.get('name') or d.get('key')} {int(d.get('percent') or 0)}%" for d in top
+                    ) + "。"
+                )
+            low = sorted(
+                [d for d in (big5.get("dims") or []) if d.get("percent") is not None],
+                key=lambda d: int(d.get("percent") or 0),
+            )[:1]
+            if low:
+                persona_lines.append(f"最不显眼的是 {low[0].get('name') or low[0].get('key')}"
+                                     f"（{int(low[0].get('percent') or 0)}%）——这不是缺点，只是你的用力点不在这儿。")
+        facets = latest.get("big5f") or {}
+        facet_rows = sorted(
+            [f for f in (facets.get("facets") or []) if f.get("percent") is not None],
+            key=lambda f: -int(f.get("percent") or 0),
+        )[:3]
+        if facet_rows:
+            persona_lines.append("30 个分面里最高的三个是：" + "、".join(
+                f"{f.get('name')}（{int(f.get('percent') or 0)}%）" for f in facet_rows
+            ) + "。")
+        t16 = latest.get("type16")
+        if t16:
+            t16_type = t16.get("type") if isinstance(t16.get("type"), dict) else {}
+            axes = t16.get("axes") or []
+            # 记录里只存百分比（left/right 是数字），轴名与两端名要回量表里查
+            scale16 = get_scale("type16") or {}
+            dim_names = {d["key"]: d["name"] for d in (scale16.get("dimensions") or [])}
+            pair_map = {p.get("key"): p for p in (scale16.get("dichotomies") or [])}
+            axis_bits = []
+            for axis in axes:
+                if not isinstance(axis, dict):
+                    continue
+                try:
+                    left_pct = int(axis.get("left") or 0)
+                    right_pct = int(axis.get("right") or 0)
+                except Exception:
+                    continue
+                pair = pair_map.get(axis.get("key")) or {}
+                win_key = pair.get("left") if left_pct >= right_pct else pair.get("right")
+                win_name = dim_names.get(win_key) or (axis.get("left") if left_pct >= right_pct else axis.get("right"))
+                axis_bits.append(f"{win_name}占上风 {max(left_pct, right_pct)}%")
+            persona_lines.append(
+                f"16 型（OEJTS）：{t16_type.get('name') or t16.get('code') or ''}"
+                + (f"，{'；'.join(axis_bits)}。" if axis_bits else "。")
+            )
+        if persona_lines:
+            sections.append({"title": "人格底座", "lines": persona_lines})
+            lines.append("【人格底座】")
+            lines.extend("· " + x for x in persona_lines)
+
+        # ② 情绪与状态
+        mood_lines = []
+        for sid, label in (("phq9", "情绪状态"), ("gad7", "焦虑"), ("pss10", "压力知觉"),
+                           ("dass21", "低落/紧张/烦躁"), ("isi", "睡眠"), ("who5", "总体幸福感"),
+                           ("swls", "生活满意度"), ("bsmas", "刷手机"), ("minispin", "社交焦虑")):
+            rec = latest.get(sid)
+            if not rec:
+                continue
+            level = rec.get("level")
+            total = rec.get("total")
+            if level:
+                mood_lines.append(f"{label}：{level}（{_scale_name(sid)} 总分 {total}）")
+            elif total is not None:
+                dims_txt = "、".join(
+                    f"{d.get('name') or d.get('key')} {d.get('band') or str(int(d.get('percent') or 0)) + '%'}"
+                    for d in _dim_list(rec, 3)
+                )
+                mood_lines.append(f"{label}：{_scale_name(sid)} —— {dims_txt}" if dims_txt
+                                  else f"{label}：{_scale_name(sid)} 原始分 {total}")
+        if mood_lines:
+            sections.append({"title": "最近的状态", "lines": mood_lines})
+            lines.append("")
+            lines.append("【最近的状态】")
+            lines.extend("· " + x for x in mood_lines)
+
+        # ③ 优势
+        via = latest.get("via")
+        strength_lines = []
+        if via:
+            top = _dim_list(via, 5)
+            if top:
+                strength_lines.append("性格优势前五：" + "、".join(
+                    f"{d.get('name') or d.get('key')}" for d in top
+                ) + "。")
+                strength_lines.append("这几项是你最省力的地方——需要撑住一件事时，先从这里借力。")
+        if strength_lines:
+            sections.append({"title": "优势", "lines": strength_lines})
+            lines.append("")
+            lines.append("【优势】")
+            lines.extend("· " + x for x in strength_lines)
+
+        # ③.5 调节方式（ERQ / FFMQ：分数描述的是「怎么做」，不是好坏）
+        skill_lines = []
+        erq = latest.get("erq")
+        if erq:
+            top = _dim_list(erq, 2)
+            if top:
+                skill_lines.append("情绪调节：" + "、".join(
+                    f"{d.get('name')} {int(d.get('percent') or 0)}%" for d in top
+                ) + "（重评 vs 抑制，没有绝对好坏，代价不同）")
+        ffmq = latest.get("ffmq15")
+        if ffmq:
+            top = _dim_list(ffmq, 3)
+            if top:
+                skill_lines.append("正念五因素里最强的是：" + "、".join(
+                    f"{d.get('name')} {int(d.get('percent') or 0)}%" for d in top
+                ))
+        if skill_lines:
+            sections.append({"title": "调节方式", "lines": skill_lines})
+            lines.append("")
+            lines.append("【调节方式】")
+            lines.extend("· " + x for x in skill_lines)
+
+        # ④ 职业与关系
+        life_lines = []
+        ria = latest.get("riasec")
+        if ria:
+            ria_type = ria.get("type") if isinstance(ria.get("type"), dict) else {}
+            code = ria.get("code") or ria_type.get("code") or ""
+            top = _dim_list(ria, 3)
+            if code or top:
+                life_lines.append("职业兴趣码 " + (code or "".join(str(d.get("key")) for d in top))
+                                  + ("（" + "、".join(str(d.get("name")) for d in top) + "）" if top else ""))
+        wv = latest.get("workvalues")
+        if wv:
+            top = _dim_list(wv, 2)
+            if top:
+                life_lines.append("工作里最看重：" + "、".join(
+                    f"{d.get('name')}（{int(d.get('percent') or 0)}%）" for d in top
+                ))
+        att = latest.get("attachment") or latest.get("ecr")
+        if att:
+            att_type = att.get("type") if isinstance(att.get("type"), dict) else {}
+            if att_type.get("name"):
+                life_lines.append(f"亲密关系：{att_type.get('name')}")
+        love = latest.get("love")
+        if love:
+            top = _dim_list(love, 1)
+            if top:
+                life_lines.append(f"接收爱的主要频道：{top[0].get('name')}")
+        if life_lines:
+            sections.append({"title": "职业与关系", "lines": life_lines})
+            lines.append("")
+            lines.append("【职业与关系】")
+            lines.extend("· " + x for x in life_lines)
+
+        # ⑤ 下一步：没做过的 / 很久没做的
+        done_ids = set(latest)
+        missing = [row for row in list_scales() if row["id"] not in done_ids]
+        stale = sorted(
+            [row for row in list_scales() if row["id"] in done_ids],
+            key=lambda row: int(latest[row["id"]].get("ts") or 0),
+        )[:3]
+        suggestion = []
+        if missing:
+            suggestion.append("还没做过：" + "、".join(row["name"] for row in missing[:5]))
+        if stale:
+            suggestion.append("很久没更新：" + "、".join(row["name"] for row in stale))
+        if suggestion:
+            sections.append({"title": "接下来可以做什么", "lines": suggestion})
+            lines.append("")
+            lines.append("【接下来】")
+            lines.extend("· " + x for x in suggestion)
+
+        if not sections:
+            return {"ok": True, "empty": True, "text": "",
+                    "hint": "还没有任何记录。先去做一份量表（建议从大五人格开始）。",
+                    "sections": [], "counts": {"scales": len(list_scales()), "done": 0}}
+
+        text = "\n".join(["心理测评室 · 我的综合画像",
+                          "（只把你自己各份量表的最近一次结果拼在一起，不是诊断）",
+                          ""] + lines + ["", "以上内容仅供自我了解与反思，不构成医学诊断。"]).strip()
+        return {
+            "ok": True,
+            "empty": False,
+            "text": text,
+            "sections": sections,
+            "counts": {"scales": len(list_scales()), "done": len(done_ids)},
+        }
 
     def _api_card(self, body: dict) -> dict:
         """把面板生成的分享卡（PNG base64）存到磁盘——内嵌 webview 里 <a download> 经常被吞掉。"""

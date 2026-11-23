@@ -1440,10 +1440,13 @@ TYPE_EMOJI = {
 
 
 def art_for(scale_id: str, key: str = "") -> dict:
-    """取结果配图：量表主视觉 + 该结果的 emoji。"""
+    """取结果配图：量表主视觉 + 该结果的 emoji + 狐狐插图（有图就用图）。"""
     base = SCALE_ART.get(scale_id, {"emoji": "🧩", "from": "#8d7ff3", "to": "#5ec8f0"})
     emoji = (TYPE_EMOJI.get(scale_id) or {}).get(key) or base["emoji"]
-    return {"emoji": emoji, "from": base["from"], "to": base["to"]}
+    category = (get_scale(scale_id) or {}).get("category", "")
+    fox = _fox_for(scale_id, category)
+    return {"emoji": emoji, "from": base["from"], "to": base["to"],
+            "img": fox["img"], "thumb": fox["thumb"]}
 
 
 # ════════════════════════════════════════════════════════════
@@ -1603,3 +1606,67 @@ for _scale in SCALES:
             _item["text"] = _fixed
     _scale["items"] = _scale["bank"][: _scale["default_items"]]
     _scale["original"] = True          # 标记：原创条目（没有公开量表可照搬）
+
+
+# ════════════════════════════════════════════════════════════
+# v1.1.0 扩展题库（照搬公开/公共领域量表原题，见 _scales_pro.py）
+#   大五 30 分面（IPIP-NEO-120）、性格优势 24 项（IPIP-VIA-R）
+# ════════════════════════════════════════════════════════════
+from ._scales_pro import SCALE_ART_EXTRA, SCALES_PRO  # noqa: E402
+from ._scales_pro import dim_detail as _pro_dim_detail  # noqa: E402
+from ._scales_wellbeing import SCALE_ART_WELLBEING, SCALES_WELLBEING  # noqa: E402
+
+SCALES.extend(SCALES_PRO)
+SCALES.extend(SCALES_WELLBEING)
+SCALE_ART.update(SCALE_ART_EXTRA)
+SCALE_ART.update(SCALE_ART_WELLBEING)
+PRO_DIM_DETAIL = _pro_dim_detail()
+
+# 新分类要参与首页分组：优势单独一类（和「人格」分开，语义不一样）
+if "优势" not in CATEGORIES:
+    CATEGORIES.append("优势")
+CATEGORY_DESC.setdefault("优势", "「我哪里最有力气」——不问毛病，只看可用的长处")
+
+for _scale in SCALES:
+    if _scale["id"] not in {_s["id"] for _s in SCALES_PRO + SCALES_WELLBEING}:
+        continue
+    _scale.setdefault("bank", _scale["items"])
+    _scale.setdefault("original", False)
+    # 整卷长度：这些量表都是照搬原题，题量 = 原量表，不再随机抽题
+    _scale.setdefault("official_count", len(_scale["items"]))
+    if _scale["kind"] == "clinical":
+        # 官方筛查量表：题量固定，原题按原顺序出，套官方分级
+        _scale["fixed"] = True
+        _scale["official_count"] = len(_scale["items"])
+        _scale["min_items"] = len(_scale["items"])
+        _scale["default_items"] = len(_scale["items"])
+        _scale.setdefault("method",
+                          "官方原题、原文计分：题目与分级阈值按原量表执行，**不做改动或扩题**。"
+                          "仅作筛查参考，不是诊断。中文为自译。")
+    else:
+        _scale.setdefault("fixed", False)
+        _scale.setdefault("min_items", min(len(_scale["items"]), 10))
+        _scale.setdefault("default_items", len(_scale["items"]))
+        _scale.setdefault("method",
+                          "5 点/4 点计分；反向题先翻转再相加，换算成该维度百分比。"
+                          "题目取自公开量表原题，中文为自译；百分比是量表内部相对强度。")
+    if _scale.get("dim_detail"):
+        PRO_DIM_DETAIL.setdefault(_scale["id"], _scale["dim_detail"])
+
+
+# ════════════════════════════════════════════════════════════
+# v1.2.0 内容重做：依恋 / 韧性 / 社交能量 / 拖延 / EQ 换成能分开人的题
+#   + 每份量表指定结果页版式与卡片文案（一测一 UI）
+# ════════════════════════════════════════════════════════════
+from ._scales_rework import apply_rework  # noqa: E402
+
+apply_rework(SCALES)
+
+from ._art import fox_for as _fox_for  # noqa: E402
+from ._scales_ui import CARD_EXTRA, ENNEA_META, LAYOUTS  # noqa: E402,F401  (ENNEA_META 供 _engine 复用)
+
+for _scale in SCALES:
+    _scale["layout"] = LAYOUTS.get(_scale["id"], "radar")
+    _scale["card_extra"] = CARD_EXTRA.get(_scale["id"], {})
+    # 卡片封面用狐狐小图（前端 <img> 直接取）
+    _scale["cover"] = _fox_for(_scale["id"], _scale.get("category", ""))["thumb"]
