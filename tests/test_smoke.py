@@ -2697,9 +2697,9 @@ class _StoreSelf:
     """带真实 RecordStore 的假 self：测 submit / compare / report。"""
 
     def __init__(self, tmp_path):
-        from neko_assessment._store import RecordStore
+        store_mod = _load("_store")
 
-        self._store = RecordStore(tmp_path / "records.json")
+        self._store = store_mod.RecordStore(tmp_path / "records.json")
         self._prefs = {"pinned": []}
         self.yui_memory_dir = ""
 
