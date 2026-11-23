@@ -10,7 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 from ._bank import DIM_DETAIL
-from ._scales import CRISIS_LINES, ENNEA_META, PRO_DIM_DETAIL, art_for, get_scale, profile_for
+from ._scales import CRISIS_LINES, PRO_DIM_DETAIL, art_for, get_scale, profile_for
+from ._scales_ui import ENNEA_META
 
 
 def _band_for(value: float, bands: list) -> tuple[str, str] | tuple[None, None]:

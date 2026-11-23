@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from ._art import fox_for as _fox_for
 from ._bank import BIG5_BANK
 from ._bank2 import EQ_BANK, RESIL_BANK, SOCIAL_BANK
 from ._bank_human import BANKS as _BANKS3
@@ -25,6 +26,11 @@ from ._bank_origin2 import FIXUPS as _ORIGIN_FIXUPS
 from ._bank_real import BANKS as _REAL_BANKS
 from ._bank_real import NAME as _REAL_NAME
 from ._bank_real import SOURCE as _REAL_SOURCE
+from ._scales_pro import SCALE_ART_EXTRA, SCALES_PRO
+from ._scales_pro import dim_detail as _pro_dim_detail
+from ._scales_rework import apply_rework
+from ._scales_ui import CARD_EXTRA, LAYOUTS
+from ._scales_wellbeing import SCALE_ART_WELLBEING, SCALES_WELLBEING
 
 # ── 通用选项组 ────────────────────────────────────────────────
 LIKERT_ACCURACY = [
@@ -1612,10 +1618,6 @@ for _scale in SCALES:
 # v1.1.0 扩展题库（照搬公开/公共领域量表原题，见 _scales_pro.py）
 #   大五 30 分面（IPIP-NEO-120）、性格优势 24 项（IPIP-VIA-R）
 # ════════════════════════════════════════════════════════════
-from ._scales_pro import SCALE_ART_EXTRA, SCALES_PRO  # noqa: E402
-from ._scales_pro import dim_detail as _pro_dim_detail  # noqa: E402
-from ._scales_wellbeing import SCALE_ART_WELLBEING, SCALES_WELLBEING  # noqa: E402
-
 SCALES.extend(SCALES_PRO)
 SCALES.extend(SCALES_WELLBEING)
 SCALE_ART.update(SCALE_ART_EXTRA)
@@ -1658,12 +1660,7 @@ for _scale in SCALES:
 # v1.2.0 内容重做：依恋 / 韧性 / 社交能量 / 拖延 / EQ 换成能分开人的题
 #   + 每份量表指定结果页版式与卡片文案（一测一 UI）
 # ════════════════════════════════════════════════════════════
-from ._scales_rework import apply_rework  # noqa: E402
-
 apply_rework(SCALES)
-
-from ._art import fox_for as _fox_for  # noqa: E402
-from ._scales_ui import CARD_EXTRA, ENNEA_META, LAYOUTS  # noqa: E402,F401  (ENNEA_META 供 _engine 复用)
 
 for _scale in SCALES:
     _scale["layout"] = LAYOUTS.get(_scale["id"], "radar")
